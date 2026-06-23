@@ -17,6 +17,7 @@ public class MainViewModel : INotifyPropertyChanged
     private GatewayClient? _client;
     private AppState _state;
     private string _currentAiMessage = "";
+    private string _lastDeltaText = "";
     private CancellationTokenSource? _streamTimeoutCts;
 
     public ObservableCollection<ChatMessage> Messages { get; } = new();
@@ -124,12 +125,32 @@ public class MainViewModel : INotifyPropertyChanged
             });
             _client.OnDeltaText += (text) => SafeInvoke(() =>
             {
+                // Skip consecutive identical substantial deltas (covers remaining duplication paths)
+                if (text.Length > 3 && text == _lastDeltaText)
+                {
+                    Logger.Info($"Delta dedup: skipped duplicate '{text[..Math.Min(text.Length, 40)]}'");
+                    return;
+                }
+                _lastDeltaText = text;
+
                 ThinkingText = "";
+                var preview = text.Length > 40 ? text[..40] + "..." : text;
+                Logger.Info($"Delta[{text.Length}]: {preview.Replace("\n", "\\n")}");
                 _currentAiMessage += text;
                 var ai = FindLastAssistantMessage();
                 if (ai != null) ai.Content = _currentAiMessage;
                 OnMessageUpdated?.Invoke();
                 ResetStreamTimeout();
+            });
+            _client.OnStreamReset += () => SafeInvoke(() =>
+            {
+                // Agent took priority over chat — clear any chat-sourced duplicate content
+                Logger.Info("Stream reset — clearing accumulated text");
+                _lastDeltaText = "";
+                _currentAiMessage = "";
+                var ai = FindLastAssistantMessage();
+                if (ai != null) ai.Content = "";
+                OnMessageUpdated?.Invoke();
             });
             _client.OnToolEvent += (name, status) => SafeInvoke(() =>
             {
@@ -201,6 +222,7 @@ public class MainViewModel : INotifyPropertyChanged
         var aiMsg = new ChatMessage { Role = ChatRole.Assistant, Content = "", IsStreaming = true };
         Messages.Add(aiMsg);
         _currentAiMessage = "";
+        _lastDeltaText = "";
         IsStreaming = true;
         ThinkingText = "思考中...";
         ResetStreamTimeout();

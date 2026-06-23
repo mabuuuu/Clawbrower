@@ -36,6 +36,9 @@ public partial class App : System.Windows.Application
 
         Logger.Info("App starting");
 
+        // Self-test: verify MarkdownParser table support
+        VerifyMarkdownParser();
+
         _mainWindow = new MainWindow();
 
         _trayIcon = new WF.NotifyIcon
@@ -125,5 +128,37 @@ public partial class App : System.Windows.Application
         g.DrawString("C", font, textBrush, new RectangleF(2, 2, 28, 28), fmt);
 
         return Icon.FromHandle(_trayBitmap.GetHicon());
+    }
+
+    private static void VerifyMarkdownParser()
+    {
+        try
+        {
+            var testTable = "| 项目 | 旧 | 新 |\n|------|----|----|\n| 名称 | 士兵3254 | **士兵9527** |";
+            var blocks = Services.MarkdownParser.ParseBlocks(testTable);
+
+            var hasTable = false;
+            foreach (var block in blocks)
+            {
+                if (block is Models.MdTable t
+                    && t.Headers.Count == 3
+                    && t.Headers[0] == "项目" && t.Headers[1] == "旧" && t.Headers[2] == "新"
+                    && t.Rows.Count == 1
+                    && t.Rows[0][0] == "名称" && t.Rows[0][1] == "士兵3254" && t.Rows[0][2] == "**士兵9527**")
+                {
+                    hasTable = true;
+                    break;
+                }
+            }
+            Logger.Info($"MarkdownParser ParseBlocks self-test: {(hasTable ? "PASS" : "FAIL")}");
+
+            var cellInlines = Services.MarkdownParser.ParseInlineLine("**士兵9527**");
+            var hasBold = cellInlines.Count == 1 && cellInlines[0] is System.Windows.Documents.Bold;
+            Logger.Info($"MarkdownParser Inline self-test: {(hasBold ? "PASS" : "FAIL")}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"MarkdownParser self-test FAILED: {ex.Message}");
+        }
     }
 }

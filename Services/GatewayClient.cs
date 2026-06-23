@@ -15,6 +15,7 @@ public class GatewayClient : IDisposable
     private int _reqCounter;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement?>> _pending = new();
     private string? _deviceToken;
+    private string? _activeStreamType; // "chat" or "agent" — prevents dual-event duplication
 
     public bool IsConnected => _ws?.State == WebSocketState.Open && _handshakeDone;
     private volatile bool _handshakeDone;
@@ -25,6 +26,7 @@ public class GatewayClient : IDisposable
     public event Action<string, string>? OnToolEvent;
     public event Action? OnStreamComplete;
     public event Action<string>? OnError;
+    public event Action? OnStreamReset;
 
     public GatewayClient(string url, string token)
     {
@@ -38,6 +40,7 @@ public class GatewayClient : IDisposable
         _ws = new ClientWebSocket();
         _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
         _handshakeDone = false;
+        _activeStreamType = null;
         _deviceToken = ConfigService.Load().DeviceToken;
 
         Logger.Info($"Connecting to {_url}...");
@@ -184,29 +187,54 @@ public class GatewayClient : IDisposable
         if (frame.Type != "event" || frame.Payload == null) return;
         var payload = frame.Payload.Value;
 
-        // chat event — streaming + completion
+        // chat event — streaming + completion (only if agent stream isn't already active)
         if (frame.EventName == "chat")
         {
+            if (_activeStreamType == "agent") return; // agent already handling this stream
+
             if (payload.TryGetProperty("deltaText", out var dt) && dt.GetString() is string txt && txt.Length > 0)
+            {
+                if (_activeStreamType != "chat")
+                    Logger.Info("Stream: chat (new stream)");
+                _activeStreamType = "chat";
                 OnDeltaText?.Invoke(txt);
+            }
             if (payload.TryGetProperty("state", out var st) && st.GetString() == "final")
+            {
+                Logger.Info("Stream: chat final — clearing");
+                _activeStreamType = null;
                 OnStreamComplete?.Invoke();
+            }
             return;
         }
 
-        // agent event — text deltas + lifecycle
+        // agent event — text deltas + lifecycle (takes priority over chat)
         if (frame.EventName == "agent")
         {
             var stream = payload.TryGetProperty("stream", out var s) ? s.GetString() : "";
             if (stream == "assistant" && payload.TryGetProperty("data", out var data))
             {
                 if (data.TryGetProperty("delta", out var d) && d.GetString() is string dtx && dtx.Length > 0)
+                {
+                    if (_activeStreamType == "chat")
+                        Logger.Info("Stream: agent overrides chat — resetting");
+                    else if (_activeStreamType != "agent")
+                        Logger.Info("Stream: agent (new stream)");
+                    // Agent takes priority: if chat was active, reset to clear any chat-sourced duplicates
+                    if (_activeStreamType == "chat")
+                        OnStreamReset?.Invoke();
+                    _activeStreamType = "agent";
                     OnDeltaText?.Invoke(dtx);
+                }
             }
             if (stream == "lifecycle" && payload.TryGetProperty("data", out var ld))
             {
                 if (ld.TryGetProperty("phase", out var ph) && ph.GetString() == "end")
+                {
+                    Logger.Info("Stream: agent lifecycle end — clearing");
+                    _activeStreamType = null;
                     OnStreamComplete?.Invoke();
+                }
             }
             return;
         }

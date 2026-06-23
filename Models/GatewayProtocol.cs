@@ -57,7 +57,13 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
     }
 
     public DateTime Timestamp { get; set; } = DateTime.Now;
-    public bool IsStreaming { get; set; }
+
+    private bool _isStreaming;
+    public bool IsStreaming
+    {
+        get => _isStreaming;
+        set { _isStreaming = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsStreaming))); }
+    }
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }

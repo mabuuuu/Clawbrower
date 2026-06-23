@@ -95,7 +95,12 @@ public partial class MainWindow : Window
     {
         if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
         {
-            Show(); Activate(); InputBox.Focus();
+            if (IsActive && InputBox.IsFocused)
+                Hide();
+            else
+            {
+                Show(); Activate(); InputBox.Focus();
+            }
             handled = true;
             return IntPtr.Zero;
         }
@@ -190,10 +195,12 @@ public partial class MainWindow : Window
     private void CopyMessage_Click(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.MenuItem menuItem &&
-            menuItem.Parent is ContextMenu ctxMenu &&
-            ctxMenu.PlacementTarget is System.Windows.Controls.TextBlock tb)
+            menuItem.Parent is ContextMenu ctxMenu)
         {
-            System.Windows.Clipboard.SetText(tb.Text);
+            if (ctxMenu.PlacementTarget is Controls.MarkdownBlock mb)
+                System.Windows.Clipboard.SetText(mb.MarkdownText);
+            else if (ctxMenu.PlacementTarget is System.Windows.Controls.TextBlock tb)
+                System.Windows.Clipboard.SetText(tb.Text);
         }
     }
 
@@ -258,7 +265,9 @@ public partial class MainWindow : Window
         for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
         {
             var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
-            if (child is TextBlock tb && tb.Parent is Border)
+            if (child is Controls.MarkdownBlock mb && mb.Parent is Border)
+                mb.Foreground = brush;
+            else if (child is TextBlock tb && tb.Parent is Border)
                 tb.Foreground = brush;
             UpdateBubbleForeground(child, brush);
         }
