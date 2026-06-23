@@ -1,0 +1,362 @@
+<Window x:Class="Clawbrower.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:Clawbrower.Models"
+        AllowsTransparency="True"
+        WindowStyle="None"
+        Topmost="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        ResizeMode="CanResizeWithGrip"
+        Width="420" Height="580"
+        MinWidth="320" MinHeight="360"
+        FontFamily="Microsoft YaHei UI"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#EEEEEE"/>
+        <SolidColorBrush x:Key="TextDimBrush" Color="#88EEEEEE"/>
+
+        <!-- Custom thin scrollbar -->
+        <Style x:Key="ScrollThumbStyle" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="#44FFFFFF" CornerRadius="3"
+                                BorderThickness="0" Margin="0,2"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="MinWidth" Value="6"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid>
+                            <Track x:Name="PART_Track" IsDirectionReversed="true">
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollThumbStyle}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <!-- Main visible content card -->
+        <Border x:Name="ContentCard"
+                CornerRadius="16"
+                Background="#CC1A1A2E"
+                Margin="12"
+                IsHitTestVisible="True">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="36"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Title bar (drag handle) -->
+                <Border x:Name="TitleBar" Grid.Row="0"
+                        Background="#E812121E"
+                        CornerRadius="16,16,0,0"
+                        MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                    <Grid Margin="8,0,6,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <!-- Left: connection dot -->
+                        <Ellipse Grid.Column="0" Width="9" Height="9" Margin="4,0,8,0">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="#666666"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                            <Setter Property="Fill" Value="#4CAF50"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <!-- Spacer -->
+                        <Border Grid.Column="1"/>
+                        <!-- Session selector + display (right-aligned, next to buttons) -->
+                        <ComboBox x:Name="SessionSelector" Grid.Column="2"
+                                  ItemsSource="{Binding Sessions}"
+                                  SelectedItem="{Binding CurrentSession}"
+                                  Foreground="{DynamicResource TextBrush}"
+                                  FontSize="12"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  VerticalAlignment="Center"
+                                  Cursor="Hand"
+                                  SelectionChanged="SessionSelector_SelectionChanged"
+                                  DropDownOpened="SessionSelector_DropDownOpened">
+                            <ComboBox.Style>
+                                <Style TargetType="ComboBox">
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ComboBox">
+                                                <Grid>
+                                                    <ToggleButton x:Name="ToggleButton"
+                                                                  Background="{TemplateBinding Background}"
+                                                                  BorderThickness="0"
+                                                                  Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource TemplatedParent}}"
+                                                                  ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource TemplatedParent}}"
+                                                                  IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                                                  ClickMode="Press">
+                                                        <ToggleButton.Template>
+                                                            <ControlTemplate TargetType="ToggleButton">
+                                                                <Border Background="Transparent" Padding="0,2">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <ContentPresenter Content="{TemplateBinding Content}"
+                                                                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                                                          VerticalAlignment="Center"
+                                                                                          RecognizesAccessKey="False"/>
+                                                                        <TextBlock Text=" ▾" FontSize="9"
+                                                                                   Foreground="{DynamicResource TextDimBrush}"
+                                                                                   VerticalAlignment="Center"/>
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </ControlTemplate>
+                                                        </ToggleButton.Template>
+                                                    </ToggleButton>
+                                                    <Popup x:Name="Popup"
+                                                           Placement="Bottom"
+                                                           IsOpen="{TemplateBinding IsDropDownOpen}"
+                                                           AllowsTransparency="True"
+                                                           Focusable="False"
+                                                           PopupAnimation="Slide">
+                                                        <Border Background="#FF1E1E2E"
+                                                                BorderBrush="#444"
+                                                                BorderThickness="1"
+                                                                CornerRadius="6"
+                                                                Padding="4"
+                                                                MinWidth="160">
+                                                            <ScrollViewer MaxHeight="200">
+                                                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                                            </ScrollViewer>
+                                                        </Border>
+                                                    </Popup>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ComboBox.Style>
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Label}" Foreground="#EEEEEE" FontSize="11" Padding="4,3"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <!-- Right: window buttons -->
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="+" Width="24" Height="22" ToolTip="新建会话"
+                                    Style="{StaticResource TitleButtonStyle}"
+                                    Click="NewSession_Click"/>
+                            <Button Content="&#x2500;"
+                                    Style="{StaticResource TitleButtonStyle}"
+                                    Click="MinimizeButton_Click"/>
+                            <Button Content="&#x2715;"
+                                    Style="{StaticResource TitleButtonStyle}"
+                                    Click="CloseButton_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Messages area -->
+                <ScrollViewer x:Name="MessageScroll"
+                              Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              Padding="10,6"
+                              PanningMode="VerticalOnly">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <ItemsControl x:Name="MessageList"
+                                      ItemsSource="{Binding Messages}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type models:ChatMessage}">
+                                    <Border x:Name="Bubble"
+                                            CornerRadius="12"
+                                            Padding="10,8"
+                                            Margin="0,3"
+                                            MaxWidth="320"
+                                            HorizontalAlignment="Left"
+                                            Background="#44333344"
+                                            SnapsToDevicePixels="True">
+                                        <TextBlock Text="{Binding Content}"
+                                                   Foreground="#EEEEEE"
+                                                   FontSize="13"
+                                                   TextWrapping="Wrap"
+                                                   LineHeight="21">
+                                        <TextBlock.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="复制" Click="CopyMessage_Click"/>
+                                            </ContextMenu>
+                                        </TextBlock.ContextMenu>
+                                    </TextBlock>
+                                    </Border>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding Role}" Value="User">
+                                            <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right"/>
+                                            <Setter TargetName="Bubble" Property="Background" Value="#55678CB3"/>
+                                            <Setter TargetName="Bubble" Property="CornerRadius" Value="12,12,4,12"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Role}" Value="Assistant">
+                                            <Setter TargetName="Bubble" Property="CornerRadius" Value="4,12,12,12"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Role}" Value="System">
+                                            <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Center"/>
+                                            <Setter TargetName="Bubble" Property="Background" Value="#22000000"/>
+                                            <Setter TargetName="Bubble" Property="MaxWidth" Value="380"/>
+                                            <Setter TargetName="Bubble" Property="Padding" Value="8,3"/>
+                                            <Setter TargetName="Bubble" Property="CornerRadius" Value="6"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <!-- Thinking indicator -->
+                        <TextBlock Grid.Row="1"
+                                   Text="{Binding ThinkingText}"
+                                   Foreground="{DynamicResource TextDimBrush}"
+                                   FontSize="12"
+                                   FontStyle="Italic"
+                                   Margin="12,4,0,0"
+                                   Visibility="{Binding ThinkingVisible, Converter={StaticResource BoolToVis}}"/>
+                    </Grid>
+                </ScrollViewer>
+
+                <!-- Input area -->
+                <Border x:Name="InputArea" Grid.Row="2"
+                        Background="#EE12121E"
+                        CornerRadius="0,0,16,16"
+                        Padding="10,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Background="#33222233" CornerRadius="10">
+                            <TextBox x:Name="InputBox"
+                                     Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
+                                     Foreground="{DynamicResource TextBrush}"
+                                     CaretBrush="#FFFFFF"
+                                     FontSize="13"
+                                     Padding="12,9"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MaxHeight="120"
+                                     VerticalScrollBarVisibility="Auto"
+                                     VerticalContentAlignment="Center"
+                                     PreviewKeyDown="InputBox_PreviewKeyDown"
+                                     SelectionBrush="#55678CB3"/>
+                        </Border>
+                        <!-- Send button (hidden when streaming) -->
+                        <Button Grid.Column="1"
+                                Content="发送"
+                                Width="50" Height="36"
+                                Margin="8,0,0,0"
+                                Background="#55678CB3"
+                                Foreground="{DynamicResource TextBrush}"
+                                BorderThickness="0"
+                                FontSize="12"
+                                Cursor="Hand"
+                                Click="SendButton_Click">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsStreaming}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Button.Resources>
+                                <Style TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="10"/>
+                                </Style>
+                            </Button.Resources>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" CornerRadius="10">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="#77789DC3"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter Property="Background" Value="#44567AA0"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <!-- Stop button (shown during streaming, mouse-only) -->
+                        <Button Grid.Column="1"
+                                Content="停止"
+                                Width="50" Height="36"
+                                Margin="8,0,0,0"
+                                Background="#CC4444"
+                                Foreground="{DynamicResource TextBrush}"
+                                BorderThickness="0"
+                                FontSize="12"
+                                Cursor="Hand"
+                                Click="StopButton_Click">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsStreaming}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Button.Resources>
+                                <Style TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="10"/>
+                                </Style>
+                            </Button.Resources>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" CornerRadius="10">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="#EE5555"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter Property="Background" Value="#993333"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

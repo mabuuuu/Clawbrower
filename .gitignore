@@ -1,0 +1,16 @@
+# 编译输出
+bin/
+obj/
+
+# IDE 配置
+.idea/
+.vs/
+*.suo
+*.user
+
+# Claude Code 内部文件
+.claude/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
