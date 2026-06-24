@@ -125,6 +125,13 @@ public class MainViewModel : INotifyPropertyChanged
             });
             _client.OnDeltaText += (text) => SafeInvoke(() =>
             {
+                // 流式已结束（OnStreamComplete 已将 IsStreaming 置 false）后仍补发的末尾 delta 会重复累积，
+                // 导致渲染完成后末尾几个字重复。此处丢弃迟到的 delta。
+                if (!IsStreaming)
+                {
+                    Logger.Info($"Delta dropped (stream already complete): len={text.Length}");
+                    return;
+                }
                 // Skip consecutive identical substantial deltas (covers remaining duplication paths)
                 if (text.Length > 3 && text == _lastDeltaText)
                 {

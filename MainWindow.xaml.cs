@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using Clawbrower.Controls;
 using Clawbrower.Models;
 using Clawbrower.Services;
 using Clawbrower.Dialogs;
@@ -21,6 +23,7 @@ public partial class MainWindow : Window
 
     private ModifierKeys _hotkeyMod;
     private Key _hotkeyKey;
+    private System.Windows.Threading.DispatcherTimer _resizeTimer;
 
     public MainWindow()
     {
@@ -44,6 +47,24 @@ public partial class MainWindow : Window
         _vm.OnMessageUpdated += () =>
             Dispatcher.InvokeAsync(() => MessageScroll.ScrollToEnd(),
                 System.Windows.Threading.DispatcherPriority.Background);
+
+        // 窗口缩放时，通知所有 MarkdownBlock 按新可用宽度重新布局（处理放大时不恢复的 bug）
+        // 用 DispatcherTimer 节流：拖动中只重置定时器，停止 ~120ms 后才遍历渲染一次，避免每帧全量重渲染卡顿
+        _resizeTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _resizeTimer.Tick += (_, _) =>
+        {
+            _resizeTimer.Stop();
+            foreach (var mb in FindVisualChildren<MarkdownBlock>(MessageList))
+                mb.InvalidateLayout();
+        };
+        MessageScroll.SizeChanged += (_, _) =>
+        {
+            _resizeTimer.Stop();
+            _resizeTimer.Start();
+        };
 
         Activated += (_, _) => InputBox.Focus();
         KeyDown += Window_KeyDown;
@@ -286,6 +307,16 @@ public partial class MainWindow : Window
             if (child is FlowDocumentScrollViewer viewer && viewer.Document != null)
                 viewer.Document.Foreground = brush;
             SyncFlowDocForeground(child, brush);
+        }
+    }
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T t) yield return t;
+            foreach (var desc in FindVisualChildren<T>(child)) yield return desc;
         }
     }
 

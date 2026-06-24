@@ -37,6 +37,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
     private TextBlock? _streamingBlock;
     private double _lastPageWidth;
+    private double _lastContentWidth;
 
     public MarkdownBlock()
     {
@@ -46,10 +47,61 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // Only re-render on width shrink — flow document needs tighter PageWidth
-        if (e.NewSize.Width < e.PreviousSize.Width - 0.5 && _streamingBlock == null)
-            Dispatcher.BeginInvoke(() => RenderMarkdown(MarkdownText),
-                System.Windows.Threading.DispatcherPriority.Background);
+        if (e.NewSize.Width <= 0) return;
+        TryRerender();
+    }
+
+    /// <summary>
+    /// 由外部容器（如 MainWindow 监听 ScrollViewer.SizeChanged）在窗口缩放时调用，
+    /// 触发气泡按新的可用宽度重新布局。内部会用"pageWidth 是否会变"做闸门，避免无谓重渲染。
+    /// </summary>
+    public void InvalidateLayout() => TryRerender();
+
+    private void TryRerender()
+    {
+        if (_streamingBlock != null) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_streamingBlock != null) return;
+            var newAvailable = ComputeAvailableWidth();
+            var newPageWidth = _lastContentWidth > 0
+                ? Math.Min(_lastContentWidth + 24, newAvailable)
+                : newAvailable;
+            if (Math.Abs(newPageWidth - _lastPageWidth) < 0.5) return;
+            RenderMarkdown(MarkdownText);
+        }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// 计算当前气泡可用的内容宽度：取 ScrollViewer 的 ViewportWidth 与最近的 Border.MaxWidth 的较小值，
+    /// 减去 Border 的横向 Padding。MarkdownBlock 自身的 ActualWidth 因 PageWidth 被显式设置而无法反映
+    /// 父容器放大后的真实可用宽度，因此必须向上遍历可视树读取。
+    /// </summary>
+    private double ComputeAvailableWidth()
+    {
+        double viewport = 0;
+        double maxW = double.PositiveInfinity;
+        double padX = 0;
+        bool borderFound = false;
+        DependencyObject? p = VisualTreeHelper.GetParent(this);
+        while (p != null)
+        {
+            if (!borderFound && p is Border b)
+            {
+                maxW = b.MaxWidth;
+                padX = b.Padding.Left + b.Padding.Right;
+                borderFound = true;
+            }
+            if (p is ScrollViewer sv && sv.ViewportWidth > 0)
+            {
+                viewport = sv.ViewportWidth;
+                break;
+            }
+            p = VisualTreeHelper.GetParent(p);
+        }
+        if (viewport <= 0) return ActualWidth > 1 ? ActualWidth : 320;
+        var avail = Math.Min(maxW, viewport) - padX;
+        return avail > 40 ? avail : (ActualWidth > 1 ? ActualWidth : 320);
     }
 
     private static void OnMarkdownTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -84,8 +136,9 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         _streamingBlock = null;
 
         // Calculate page width from content: tight for short text, capped at available space
-        var availableWidth = ActualWidth > 1 ? ActualWidth : 320;
+        var availableWidth = ComputeAvailableWidth();
         var contentWidth = EstimateContentWidth(markdown);
+        _lastContentWidth = contentWidth;
         var pageWidth = contentWidth > 0
             ? Math.Min(contentWidth + 24, availableWidth)
             : availableWidth;
