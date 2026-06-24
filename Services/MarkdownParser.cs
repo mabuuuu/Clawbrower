@@ -366,7 +366,7 @@ public static class MarkdownParser
             inlines.Add(new Run(text[lastIndex..]));
     }
 
-    private static string StripInlineMarkdown(string text)
+    public static string StripInlineMarkdown(string text)
     {
         text = Regex.Replace(text, @"\*\*(.+?)\*\*", "$1");
         text = Regex.Replace(text, @"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", "$1");

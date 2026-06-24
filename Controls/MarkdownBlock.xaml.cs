@@ -6,6 +6,7 @@ using Clawbrower.Models;
 using Clawbrower.Services;
 using WpfColor = System.Windows.Media.Color;
 using WpfBrush = System.Windows.Media.SolidColorBrush;
+using WpfFontStyle = System.Windows.FontStyle;
 
 namespace Clawbrower.Controls;
 
@@ -72,70 +73,93 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         var blocks = MarkdownParser.ParseBlocks(markdown);
         foreach (var block in blocks)
         {
-            switch (block)
+            try
             {
-                case MdParagraph p:
-                    var tb = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 13, Margin = new Thickness(0, 2, 0, 2) };
-                    foreach (var inline in p.Inlines)
-                        tb.Inlines.Add(inline);
-                    ContentRoot.Children.Add(tb);
-                    break;
+                switch (block)
+                {
+                    case MdParagraph p:
+                        ContentRoot.Children.Add(CreateTextBlock(p.Inlines, 13, FontWeights.Normal, FontStyles.Normal,
+                            new Thickness(0, 2, 0, 2)));
+                        break;
 
-                case MdHeader h:
-                    var ht = new TextBlock { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 6, 0, 2) };
-                    ht.FontSize = h.Level switch { 1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0 };
-                    foreach (var inline in MarkdownParser.ParseInlineLine(h.Text))
-                        ht.Inlines.Add(inline);
-                    ContentRoot.Children.Add(ht);
-                    break;
+                    case MdHeader h:
+                        var hSize = h.Level switch { 1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0 };
+                        ContentRoot.Children.Add(CreateTextBlock(
+                            MarkdownParser.ParseInlineLine(h.Text), hSize, FontWeights.Bold, FontStyles.Normal,
+                            new Thickness(0, 6, 0, 2)));
+                        break;
 
-                case MdTable t:
-                    ContentRoot.Children.Add(RenderTable(t));
-                    break;
+                    case MdTable t:
+                        ContentRoot.Children.Add(RenderTable(t));
+                        break;
 
-                case MdList l:
-                    var lt = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 13, Margin = new Thickness(0, 2, 0, 2) };
-                    var dimBrush = new WpfBrush(WpfColor.FromRgb(0x88, 0x88, 0xAA));
-                    int num = 1;
-                    foreach (var item in l.Items)
-                    {
-                        if (l.Ordered)
-                            lt.Inlines.Add(new Run($"{num++}. ") { Foreground = dimBrush });
-                        else
+                    case MdList l:
+                        var listInlines = new List<Inline>();
+                        var dimBrush = new WpfBrush(WpfColor.FromRgb(0x88, 0x88, 0xAA));
+                        int num = 1;
+                        foreach (var item in l.Items)
                         {
-                            var prefix = l.IndentLevel switch { 0 => "• ", <= 2 => "◦ ", _ => "▪ " };
-                            lt.Inlines.Add(new Run(prefix) { Foreground = dimBrush });
+                            if (l.Ordered)
+                                listInlines.Add(new Run($"{num++}. ") { Foreground = dimBrush });
+                            else
+                            {
+                                var prefix = l.IndentLevel switch { 0 => "• ", <= 2 => "◦ ", _ => "▪ " };
+                                listInlines.Add(new Run(prefix) { Foreground = dimBrush });
+                            }
+                            foreach (var inline in MarkdownParser.ParseInlineLine(item))
+                                listInlines.Add(inline);
+                            listInlines.Add(new LineBreak());
                         }
-                        foreach (var inline in MarkdownParser.ParseInlineLine(item))
-                            lt.Inlines.Add(inline);
-                        lt.Inlines.Add(new LineBreak());
-                    }
-                    ContentRoot.Children.Add(lt);
-                    break;
+                        ContentRoot.Children.Add(CreateTextBlock(listInlines, 13, FontWeights.Normal, FontStyles.Normal,
+                            new Thickness(0, 2, 0, 2)));
+                        break;
 
-                case MdQuote q:
-                    var qt = new TextBlock
-                    {
-                        TextWrapping = TextWrapping.Wrap, FontSize = 13, FontStyle = FontStyles.Italic,
-                        Foreground = new WpfBrush(WpfColor.FromRgb(0xBB, 0xBB, 0xCC)),
-                        Margin = new Thickness(8, 2, 0, 2)
-                    };
-                    qt.Inlines.Add(new Run("▎ ") { Foreground = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)) });
-                    foreach (var inline in MarkdownParser.ParseInlineLine(q.Text))
-                        qt.Inlines.Add(inline);
-                    ContentRoot.Children.Add(qt);
-                    break;
+                    case MdQuote q:
+                        var quoteInlines = new List<Inline>
+                        {
+                            new Run("▎ ") { Foreground = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)) }
+                        };
+                        foreach (var inline in MarkdownParser.ParseInlineLine(q.Text))
+                            quoteInlines.Add(inline);
+                        var qt = CreateTextBlock(quoteInlines, 13, FontWeights.Normal, FontStyles.Italic,
+                            new Thickness(8, 2, 0, 2));
+                        qt.Foreground = new WpfBrush(WpfColor.FromRgb(0xBB, 0xBB, 0xCC));
+                        ContentRoot.Children.Add(qt);
+                        break;
 
-                case MdDivider:
-                    ContentRoot.Children.Add(new Border
-                    {
-                        Height = 1, Margin = new Thickness(0, 6, 0, 6),
-                        Background = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55))
-                    });
-                    break;
+                    case MdDivider:
+                        ContentRoot.Children.Add(new Border
+                        {
+                            Height = 1, Margin = new Thickness(0, 6, 0, 6),
+                            Background = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55))
+                        });
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"RenderMarkdown block failed: {ex.Message}");
             }
         }
     }
+
+    private static TextBlock CreateTextBlock(
+        IEnumerable<Inline> inlines, double fontSize, FontWeight weight, WpfFontStyle style, Thickness margin)
+    {
+        var tb = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = fontSize,
+            FontWeight = weight,
+            FontStyle = style,
+            Margin = margin
+        };
+        foreach (var inline in inlines)
+            tb.Inlines.Add(inline);
+        return tb;
+    }
+
+    // ── Table rendering ──
 
     private static Grid RenderTable(MdTable table)
     {
@@ -143,7 +167,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         var colCount = table.Headers.Count;
 
         for (int c = 0; c < colCount; c++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 50, MaxWidth = 300 });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 40 });
 
         // Header row
         grid.RowDefinitions.Add(new RowDefinition());
@@ -182,17 +206,25 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
     private static Border CreateTableCell(string text, FontWeight weight, string? alignment)
     {
-        var tb = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
-        foreach (var inline in MarkdownParser.ParseInlineLine(text))
-            tb.Inlines.Add(inline);
-
-        if (weight == FontWeights.Bold) tb.FontWeight = weight;
-
-        tb.TextAlignment = alignment switch
+        // Use TextBox for selectable text, strip inline markdown for readability
+        var tb = new System.Windows.Controls.TextBox
         {
-            "center" => TextAlignment.Center,
-            "right" => TextAlignment.Right,
-            _ => TextAlignment.Left
+            Text = MarkdownParser.StripInlineMarkdown(text),
+            IsReadOnly = true,
+            IsReadOnlyCaretVisible = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            FontWeight = weight,
+            BorderThickness = new Thickness(0),
+            Background = System.Windows.Media.Brushes.Transparent,
+            Padding = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.IBeam,
+            TextAlignment = alignment switch
+            {
+                "center" => TextAlignment.Center,
+                "right" => TextAlignment.Right,
+                _ => TextAlignment.Left
+            }
         };
 
         return new Border

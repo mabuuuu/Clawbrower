@@ -99,6 +99,8 @@ public partial class MainWindow : Window
                 Hide();
             else
             {
+                if (WindowState == WindowState.Maximized)
+                    WindowState = WindowState.Normal;
                 Show(); Activate(); InputBox.Focus();
             }
             handled = true;
