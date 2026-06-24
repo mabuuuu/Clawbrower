@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -7,6 +8,8 @@ using Clawbrower.Services;
 using WpfColor = System.Windows.Media.Color;
 using WpfBrush = System.Windows.Media.SolidColorBrush;
 using WpfFontStyle = System.Windows.FontStyle;
+using WpfFontFamily = System.Windows.Media.FontFamily;
+using FlowDocumentScrollViewer = System.Windows.Controls.FlowDocumentScrollViewer;
 
 namespace Clawbrower.Controls;
 
@@ -33,10 +36,20 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     }
 
     private TextBlock? _streamingBlock;
+    private double _lastPageWidth;
 
     public MarkdownBlock()
     {
         InitializeComponent();
+        SizeChanged += OnSizeChanged;
+    }
+
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Only re-render on width shrink — flow document needs tighter PageWidth
+        if (e.NewSize.Width < e.PreviousSize.Width - 0.5 && _streamingBlock == null)
+            Dispatcher.BeginInvoke(() => RenderMarkdown(MarkdownText),
+                System.Windows.Threading.DispatcherPriority.Background);
     }
 
     private static void OnMarkdownTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -70,6 +83,23 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         ContentRoot.Children.Clear();
         _streamingBlock = null;
 
+        // Calculate page width from content: tight for short text, capped at available space
+        var availableWidth = ActualWidth > 1 ? ActualWidth : 320;
+        var contentWidth = EstimateContentWidth(markdown);
+        var pageWidth = contentWidth > 0
+            ? Math.Min(contentWidth + 24, availableWidth)
+            : availableWidth;
+        _lastPageWidth = pageWidth;
+
+        var doc = new FlowDocument
+        {
+            FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+            FontSize = 13,
+            PagePadding = new Thickness(0),
+            PageWidth = pageWidth,
+            ColumnWidth = double.PositiveInfinity
+        };
+
         var blocks = MarkdownParser.ParseBlocks(markdown);
         foreach (var block in blocks)
         {
@@ -78,61 +108,35 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 switch (block)
                 {
                     case MdParagraph p:
-                        ContentRoot.Children.Add(CreateTextBlock(p.Inlines, 13, FontWeights.Normal, FontStyles.Normal,
+                        doc.Blocks.Add(CreateFlowParagraph(p.Inlines, 13, FontWeights.Normal, FontStyles.Normal,
                             new Thickness(0, 2, 0, 2)));
                         break;
 
                     case MdHeader h:
                         var hSize = h.Level switch { 1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0 };
-                        ContentRoot.Children.Add(CreateTextBlock(
+                        doc.Blocks.Add(CreateFlowParagraph(
                             MarkdownParser.ParseInlineLine(h.Text), hSize, FontWeights.Bold, FontStyles.Normal,
                             new Thickness(0, 6, 0, 2)));
                         break;
 
                     case MdTable t:
-                        ContentRoot.Children.Add(RenderTable(t));
+                        doc.Blocks.Add(CreateFlowTable(t));
                         break;
 
                     case MdList l:
-                        var listInlines = new List<Inline>();
-                        var dimBrush = new WpfBrush(WpfColor.FromRgb(0x88, 0x88, 0xAA));
-                        int num = 1;
-                        foreach (var item in l.Items)
-                        {
-                            if (l.Ordered)
-                                listInlines.Add(new Run($"{num++}. ") { Foreground = dimBrush });
-                            else
-                            {
-                                var prefix = l.IndentLevel switch { 0 => "• ", <= 2 => "◦ ", _ => "▪ " };
-                                listInlines.Add(new Run(prefix) { Foreground = dimBrush });
-                            }
-                            foreach (var inline in MarkdownParser.ParseInlineLine(item))
-                                listInlines.Add(inline);
-                            listInlines.Add(new LineBreak());
-                        }
-                        ContentRoot.Children.Add(CreateTextBlock(listInlines, 13, FontWeights.Normal, FontStyles.Normal,
-                            new Thickness(0, 2, 0, 2)));
+                        doc.Blocks.Add(CreateFlowList(l));
                         break;
 
                     case MdQuote q:
-                        var quoteInlines = new List<Inline>
-                        {
-                            new Run("▎ ") { Foreground = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)) }
-                        };
-                        foreach (var inline in MarkdownParser.ParseInlineLine(q.Text))
-                            quoteInlines.Add(inline);
-                        var qt = CreateTextBlock(quoteInlines, 13, FontWeights.Normal, FontStyles.Italic,
-                            new Thickness(8, 2, 0, 2));
-                        qt.Foreground = new WpfBrush(WpfColor.FromRgb(0xBB, 0xBB, 0xCC));
-                        ContentRoot.Children.Add(qt);
+                        doc.Blocks.Add(CreateFlowQuote(q));
                         break;
 
                     case MdDivider:
-                        ContentRoot.Children.Add(new Border
+                        doc.Blocks.Add(new BlockUIContainer(new Border
                         {
                             Height = 1, Margin = new Thickness(0, 6, 0, 6),
                             Background = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55))
-                        });
+                        }));
                         break;
                 }
             }
@@ -141,96 +145,168 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 Logger.Error($"RenderMarkdown block failed: {ex.Message}");
             }
         }
+
+        var viewer = new FlowDocumentScrollViewer
+        {
+            Document = doc,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            IsToolBarVisible = false,
+            Background = System.Windows.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+        };
+
+        ContentRoot.Children.Add(viewer);
     }
 
-    private static TextBlock CreateTextBlock(
+    private static double EstimateContentWidth(string markdown)
+    {
+        if (string.IsNullOrEmpty(markdown)) return 0;
+        double maxWidth = 0;
+        var typeface = new Typeface("Microsoft YaHei UI");
+        const double dpi = 1.0;
+
+        foreach (var raw in markdown.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (string.IsNullOrEmpty(line)) continue;
+            // Skip table separators
+            if (line.All(c => c == '|' || c == '-' || c == ':' || c == ' ')) continue;
+
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"^(#{1,6})\s+");
+            double fontSize = match.Success ? match.Groups[1].Length switch
+            {
+                1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0
+            } : 13.0;
+
+            var text = MarkdownParser.StripInlineMarkdown(line);
+            if (string.IsNullOrEmpty(text)) continue;
+
+            var ft = new FormattedText(text, CultureInfo.CurrentCulture,
+                System.Windows.FlowDirection.LeftToRight, typeface, fontSize, System.Windows.Media.Brushes.Black, dpi);
+            if (ft.Width > maxWidth) maxWidth = ft.Width;
+        }
+        return Math.Min(maxWidth, 320);
+    }
+
+    // ── FlowDocument helpers ──
+
+    private static Paragraph CreateFlowParagraph(
         IEnumerable<Inline> inlines, double fontSize, FontWeight weight, WpfFontStyle style, Thickness margin)
     {
-        var tb = new TextBlock
+        var p = new Paragraph
         {
-            TextWrapping = TextWrapping.Wrap,
             FontSize = fontSize,
             FontWeight = weight,
             FontStyle = style,
             Margin = margin
         };
         foreach (var inline in inlines)
-            tb.Inlines.Add(inline);
-        return tb;
+            p.Inlines.Add(inline);
+        return p;
     }
 
-    // ── Table rendering ──
-
-    private static Grid RenderTable(MdTable table)
+    private static Table CreateFlowTable(MdTable mdTable)
     {
-        var grid = new Grid { Margin = new Thickness(0, 4, 0, 4) };
-        var colCount = table.Headers.Count;
+        var table = new Table { Margin = new Thickness(0, 4, 0, 4) };
+        var colCount = mdTable.Headers.Count;
 
         for (int c = 0; c < colCount; c++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 40 });
+            table.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
+
+        var rowGroup = new TableRowGroup();
 
         // Header row
-        grid.RowDefinitions.Add(new RowDefinition());
+        var headerRow = new TableRow();
         for (int c = 0; c < colCount; c++)
         {
-            var cell = CreateTableCell(table.Headers[c], FontWeights.Bold, table.Alignments.Count > c ? table.Alignments[c] : null);
-            cell.Background = new WpfBrush(WpfColor.FromRgb(0x2A, 0x2A, 0x3A));
-            cell.BorderThickness = new Thickness(0, 0, 0, 1);
-            cell.BorderBrush = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55));
-            Grid.SetRow(cell, 0);
-            Grid.SetColumn(cell, c);
-            grid.Children.Add(cell);
+            var cell = new TableCell(new Paragraph(new Run(MarkdownParser.StripInlineMarkdown(mdTable.Headers[c])))
+            {
+                FontSize = 12,
+                FontWeight = FontWeights.Bold
+            })
+            {
+                Background = new WpfBrush(WpfColor.FromRgb(0x2A, 0x2A, 0x3A)),
+                BorderBrush = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55)),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(6, 3, 6, 3)
+            };
+            ApplyCellAlign(cell, mdTable.Alignments.Count > c ? mdTable.Alignments[c] : null);
+            headerRow.Cells.Add(cell);
         }
+        rowGroup.Rows.Add(headerRow);
 
         // Data rows
-        int rowIdx = 1;
-        foreach (var row in table.Rows)
+        foreach (var row in mdTable.Rows)
         {
-            grid.RowDefinitions.Add(new RowDefinition());
+            var tableRow = new TableRow();
             for (int c = 0; c < colCount; c++)
             {
                 var text = c < row.Count ? row[c] : "";
-                var align = table.Alignments.Count > c ? table.Alignments[c] : null;
-                var cell = CreateTableCell(text, FontWeights.Normal, align);
-                cell.BorderBrush = new WpfBrush(WpfColor.FromRgb(0x33, 0x33, 0x44));
-                cell.BorderThickness = new Thickness(0.5);
-                Grid.SetRow(cell, rowIdx);
-                Grid.SetColumn(cell, c);
-                grid.Children.Add(cell);
+                var align = mdTable.Alignments.Count > c ? mdTable.Alignments[c] : null;
+                var cell = new TableCell(new Paragraph(new Run(MarkdownParser.StripInlineMarkdown(text)))
+                {
+                    FontSize = 12
+                })
+                {
+                    BorderBrush = new WpfBrush(WpfColor.FromRgb(0x33, 0x33, 0x44)),
+                    BorderThickness = new Thickness(0.5),
+                    Padding = new Thickness(6, 3, 6, 3)
+                };
+                ApplyCellAlign(cell, align);
+                tableRow.Cells.Add(cell);
             }
-            rowIdx++;
+            rowGroup.Rows.Add(tableRow);
         }
 
-        return grid;
+        table.RowGroups.Add(rowGroup);
+        return table;
     }
 
-    private static Border CreateTableCell(string text, FontWeight weight, string? alignment)
+    private static void ApplyCellAlign(TableCell cell, string? alignment)
     {
-        // Use TextBox for selectable text, strip inline markdown for readability
-        var tb = new System.Windows.Controls.TextBox
+        cell.TextAlignment = alignment switch
         {
-            Text = MarkdownParser.StripInlineMarkdown(text),
-            IsReadOnly = true,
-            IsReadOnlyCaretVisible = true,
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 12,
-            FontWeight = weight,
-            BorderThickness = new Thickness(0),
-            Background = System.Windows.Media.Brushes.Transparent,
-            Padding = new Thickness(0),
-            Cursor = System.Windows.Input.Cursors.IBeam,
-            TextAlignment = alignment switch
-            {
-                "center" => TextAlignment.Center,
-                "right" => TextAlignment.Right,
-                _ => TextAlignment.Left
-            }
+            "center" => TextAlignment.Center,
+            "right" => TextAlignment.Right,
+            _ => TextAlignment.Left
         };
+    }
 
-        return new Border
+    private static List CreateFlowList(MdList l)
+    {
+        var list = new List
         {
-            Child = tb,
-            Padding = new Thickness(6, 3, 6, 3)
+            MarkerStyle = l.Ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
+            Margin = new Thickness(0, 2, 0, 2)
         };
+        foreach (var item in l.Items)
+        {
+            var listItem = new ListItem();
+            var para = new Paragraph { Margin = new Thickness(0) };
+            foreach (var inline in MarkdownParser.ParseInlineLine(item))
+                para.Inlines.Add(inline);
+            listItem.Blocks.Add(para);
+            list.ListItems.Add(listItem);
+        }
+        return list;
+    }
+
+    private static Paragraph CreateFlowQuote(MdQuote q)
+    {
+        var p = new Paragraph
+        {
+            FontStyle = FontStyles.Italic,
+            Foreground = new WpfBrush(WpfColor.FromRgb(0xBB, 0xBB, 0xCC)),
+            BorderBrush = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)),
+            BorderThickness = new Thickness(4, 0, 0, 0),
+            Padding = new Thickness(8, 0, 0, 0),
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+        foreach (var inline in MarkdownParser.ParseInlineLine(q.Text))
+            p.Inlines.Add(inline);
+        return p;
     }
 }

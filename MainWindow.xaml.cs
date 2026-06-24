@@ -268,10 +268,24 @@ public partial class MainWindow : Window
         {
             var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
             if (child is Controls.MarkdownBlock mb && mb.Parent is Border)
+            {
                 mb.Foreground = brush;
+                SyncFlowDocForeground(child, brush);
+            }
             else if (child is TextBlock tb && tb.Parent is Border)
                 tb.Foreground = brush;
             UpdateBubbleForeground(child, brush);
+        }
+    }
+
+    private static void SyncFlowDocForeground(System.Windows.DependencyObject parent, System.Windows.Media.Brush brush)
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is FlowDocumentScrollViewer viewer && viewer.Document != null)
+                viewer.Document.Foreground = brush;
+            SyncFlowDocForeground(child, brush);
         }
     }
 
