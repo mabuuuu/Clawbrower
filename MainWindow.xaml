@@ -183,14 +183,23 @@
                               Grid.Row="1"
                               VerticalScrollBarVisibility="Auto"
                               Padding="10,6"
-                              PanningMode="VerticalOnly">
+                              PanningMode="VerticalOnly"
+                              >
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <ItemsControl x:Name="MessageList"
+                                      Grid.Row="0"
+                                      Background="Transparent"
                                       ItemsSource="{Binding Messages}">
+                            <ItemsControl.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="加载历史消息" Click="LoadMoreHistory_Click"/>
+                                    <MenuItem Header="清除当前会话本地记录" Click="ClearMessages_Click"/>
+                                </ContextMenu>
+                            </ItemsControl.ContextMenu>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate DataType="{x:Type models:ChatMessage}">
                                     <Border x:Name="Bubble"

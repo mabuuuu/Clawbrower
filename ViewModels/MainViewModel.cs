@@ -20,9 +20,18 @@ public class MainViewModel : INotifyPropertyChanged
     private string _lastDeltaText = "";
     private CancellationTokenSource? _streamTimeoutCts;
 
+    // 历史记录加载相关状态
+    private bool _isLoadingHistory;
+
     public ObservableCollection<ChatMessage> Messages { get; } = new();
     public ObservableCollection<SessionInfo> Sessions { get; } = new();
     public event Action? OnMessageUpdated;
+
+    public bool IsLoadingHistory
+    {
+        get => _isLoadingHistory;
+        private set { _isLoadingHistory = value; OnPropertyChanged(); }
+    }
 
     private SessionInfo? _currentSession;
     public SessionInfo? CurrentSession
@@ -35,6 +44,9 @@ public class MainViewModel : INotifyPropertyChanged
             _sessionKey = value.Key;
             OnPropertyChanged();
             Logger.Info($"Session switched to: {value.Key}");
+            // 清空本地消息；历史由右键菜单主动加载
+            Messages.Clear();
+            AddSystemMessage($"已切换到会话: {_currentSession?.Label}");
         }
     }
 
@@ -336,6 +348,190 @@ public class MainViewModel : INotifyPropertyChanged
             }
         }
         catch (Exception ex) { AddSystemMessage($"创建会话失败: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// <summary>
+    /// 从服务端加载当前会话最近30条历史消息（右键菜单触发）。
+    /// </summary>
+    public async Task LoadHistoryAsync()
+    {
+        if (_client == null || !IsConnected) return;
+        if (IsLoadingHistory) return;
+
+        IsLoadingHistory = true;
+        try
+        {
+            var ps = new Dictionary<string, object>
+            {
+                ["sessionKey"] = _sessionKey,
+                ["limit"] = 30
+            };
+
+            Logger.Info($"Loading history: method=chat.history, sessionKey={_sessionKey}, limit=30");
+            var result = await _client.SendRpcAsync("chat.history", ps);
+
+            if (result == null)
+            {
+                Logger.Info("chat.history returned null");
+                return;
+            }
+
+            var payload = result.Value;
+            // 兼容返回格式：{ messages: [...] } 或直接数组
+            JsonElement msgsEl = default;
+            bool found = false;
+            if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("messages", out msgsEl))
+            {
+                found = true;
+            }
+            else if (payload.ValueKind == JsonValueKind.Array)
+            {
+                msgsEl = payload;
+                found = true;
+            }
+
+            if (!found)
+            {
+                Logger.Info($"chat.history unexpected payload: {payload.GetRawText()}");
+                return;
+            }
+
+            var historyMessages = new List<ChatMessage>();
+            foreach (var m in msgsEl.EnumerateArray())
+            {
+                var role = "assistant";
+                if (m.TryGetProperty("role", out var r))
+                {
+                    if (r.ValueKind == JsonValueKind.String)
+                        role = r.GetString() ?? "assistant";
+                    else if (r.ValueKind == JsonValueKind.Array && r.GetArrayLength() > 0
+                        && r[0].ValueKind == JsonValueKind.String)
+                        role = r[0].GetString() ?? "assistant";
+                }
+
+                var content = "";
+                if (m.TryGetProperty("content", out var c))
+                {
+                    if (c.ValueKind == JsonValueKind.String)
+                    {
+                        content = c.GetString() ?? "";
+                    }
+                    else if (c.ValueKind == JsonValueKind.Array)
+                    {
+                        var sb = new System.Text.StringBuilder();
+                        foreach (var block in c.EnumerateArray())
+                        {
+                            if (block.TryGetProperty("text", out var bt)
+                                && bt.ValueKind == JsonValueKind.String)
+                                sb.AppendLine(bt.GetString());
+                            else if (block.TryGetProperty("content", out var bc)
+                                && bc.ValueKind == JsonValueKind.String)
+                                sb.AppendLine(bc.GetString());
+                        }
+                        content = sb.ToString().TrimEnd('\r', '\n');
+                    }
+                }
+                if (string.IsNullOrEmpty(content)
+                    && m.TryGetProperty("text", out var txt)
+                    && txt.ValueKind == JsonValueKind.String)
+                    content = txt.GetString() ?? "";
+
+                var id = "";
+                if (m.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
+                    id = idEl.GetString() ?? "";
+
+                var chatRole = role.ToLowerInvariant() switch
+                {
+                    "user" => ChatRole.User,
+                    "system" => ChatRole.System,
+                    "toolresult" => ChatRole.System,
+                    "tool_use" => ChatRole.Assistant,
+                    _ => ChatRole.Assistant
+                };
+
+                var ts = DateTime.Now;
+                if (m.TryGetProperty("timestamp", out var tsEl))
+                {
+                    if (tsEl.ValueKind == JsonValueKind.Number)
+                    {
+                        var ms = tsEl.TryGetInt64(out var v) ? v : (long)tsEl.GetDouble();
+                        try { ts = DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime; } catch { }
+                    }
+                    else if (tsEl.ValueKind == JsonValueKind.String
+                        && DateTime.TryParse(tsEl.GetString(), out var parsed))
+                    {
+                        ts = parsed;
+                    }
+                }
+
+                historyMessages.Add(new ChatMessage
+                {
+                    Id = string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N")[..8] : id,
+                    Role = chatRole,
+                    Content = content,
+                    Timestamp = ts,
+                    IsStreaming = false
+                });
+            }
+
+            if (historyMessages.Count == 0)
+            {
+                Logger.Info("History empty");
+                return;
+            }
+
+            // 历史消息按时间正序排列（最早在前）
+            historyMessages.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
+
+            // 客户端去重
+            if (Messages.Count > 0)
+            {
+                var existingKeys = new HashSet<string>(
+                    Messages.Select(m => $"{m.Role}|{m.Content}|{m.Timestamp:O}"));
+                var before = historyMessages.Count;
+                historyMessages = historyMessages
+                    .Where(m => !existingKeys.Contains($"{m.Role}|{m.Content}|{m.Timestamp:O}"))
+                    .ToList();
+                if (historyMessages.Count < before)
+                    Logger.Info($"Dedup: removed {before - historyMessages.Count} duplicate messages");
+            }
+
+            if (historyMessages.Count == 0)
+            {
+                Logger.Info("All loaded messages are duplicates");
+                return;
+            }
+
+            Messages.Clear();
+
+            // 插入到消息列表开头
+            for (int i = 0; i < historyMessages.Count; i++)
+                Messages.Insert(i, historyMessages[i]);
+
+            Logger.Info($"History loaded: {historyMessages.Count} messages");
+            OnMessageUpdated?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"LoadHistory failed: {ex.Message}");
+            AddSystemMessage($"加载历史消息失败: {ex.Message}");
+        }
+        finally
+        {
+            IsLoadingHistory = false;
+        }
+    }
+
+    /// <summary>
+    /// 清除当前会话的本地聊天记录（仅清空内存中的Messages，不影响服务端数据）。
+    /// </summary>
+    public void ClearCurrentSessionMessages()
+    {
+        Logger.Info($"Clearing local messages for session: {_sessionKey}");
+        Messages.Clear();
+        AddSystemMessage("已清除本地聊天记录（服务端历史不受影响）");
+        OnMessageUpdated?.Invoke();
     }
 
     // ── Safe dispatcher helpers ──

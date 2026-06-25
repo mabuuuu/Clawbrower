@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private ModifierKeys _hotkeyMod;
     private Key _hotkeyKey;
     private System.Windows.Threading.DispatcherTimer _resizeTimer;
+    private bool _suppressScrollToEnd;
 
     public MainWindow()
     {
@@ -41,12 +42,18 @@ public partial class MainWindow : Window
         SourceInitialized += OnSourceInitialized;
 
         _vm.Messages.CollectionChanged += (_, _) =>
-            Dispatcher.InvokeAsync(() => MessageScroll.ScrollToEnd(),
-                System.Windows.Threading.DispatcherPriority.Background);
+            Dispatcher.InvokeAsync(() =>
+            {
+                if (!_suppressScrollToEnd)
+                    MessageScroll.ScrollToEnd();
+            }, System.Windows.Threading.DispatcherPriority.Background);
 
         _vm.OnMessageUpdated += () =>
-            Dispatcher.InvokeAsync(() => MessageScroll.ScrollToEnd(),
-                System.Windows.Threading.DispatcherPriority.Background);
+            Dispatcher.InvokeAsync(() =>
+            {
+                if (!_suppressScrollToEnd)
+                    MessageScroll.ScrollToEnd();
+            }, System.Windows.Threading.DispatcherPriority.Background);
 
         // 窗口缩放时，通知所有 MarkdownBlock 按新可用宽度重新布局（处理放大时不恢复的 bug）
         // 用 DispatcherTimer 节流：拖动中只重置定时器，停止 ~120ms 后才遍历渲染一次，避免每帧全量重渲染卡顿
@@ -225,6 +232,29 @@ public partial class MainWindow : Window
             else if (ctxMenu.PlacementTarget is System.Windows.Controls.TextBlock tb)
                 System.Windows.Clipboard.SetText(tb.Text);
         }
+    }
+
+    // ── History loading (scroll-to-top trigger) ──
+
+    private void LoadMoreHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.IsConnected && !_vm.IsLoadingHistory)
+        {
+            _suppressScrollToEnd = true;
+            _ = _vm.LoadHistoryAsync().ContinueWith(_ =>
+                Dispatcher.InvokeAsync(() => { _suppressScrollToEnd = false; },
+                    System.Windows.Threading.DispatcherPriority.Background));
+        }
+    }
+
+    private void ClearMessages_Click(object sender, RoutedEventArgs e)
+    {
+        _suppressScrollToEnd = true;
+        _vm.ClearCurrentSessionMessages();
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _suppressScrollToEnd = false;
+        }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     }
 
     // ── Settings callbacks ──
