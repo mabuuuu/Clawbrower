@@ -22,9 +22,9 @@ public class GatewayClient : IDisposable
 
     public event Action? OnConnected;
     public event Action<string>? OnDisconnected;
-    public event Action<string>? OnDeltaText;
+    public event Action<string, string>? OnDeltaText; // (sessionKey, deltaText)
     public event Action<string, string>? OnToolEvent;
-    public event Action? OnStreamComplete;
+    public event Action<string>? OnStreamComplete; // (sessionKey)
     public event Action<string>? OnError;
     public event Action? OnStreamReset;
 
@@ -192,18 +192,20 @@ public class GatewayClient : IDisposable
         {
             if (_activeStreamType == "agent") return; // agent already handling this stream
 
+            var sessionKey = payload.TryGetProperty("sessionKey", out var sk) ? sk.GetString() ?? "" : "";
+
             if (payload.TryGetProperty("deltaText", out var dt) && dt.GetString() is string txt && txt.Length > 0)
             {
                 if (_activeStreamType != "chat")
                     Logger.Info("Stream: chat (new stream)");
                 _activeStreamType = "chat";
-                OnDeltaText?.Invoke(txt);
+                OnDeltaText?.Invoke(sessionKey, txt);
             }
             if (payload.TryGetProperty("state", out var st) && st.GetString() == "final")
             {
                 Logger.Info("Stream: chat final — clearing");
                 _activeStreamType = null;
-                OnStreamComplete?.Invoke();
+                OnStreamComplete?.Invoke(sessionKey);
             }
             return;
         }
@@ -212,6 +214,7 @@ public class GatewayClient : IDisposable
         if (frame.EventName == "agent")
         {
             var stream = payload.TryGetProperty("stream", out var s) ? s.GetString() : "";
+            var agSessionKey = payload.TryGetProperty("sessionKey", out var agSk) ? agSk.GetString() ?? "" : "";
             if (stream == "assistant" && payload.TryGetProperty("data", out var data))
             {
                 if (data.TryGetProperty("delta", out var d) && d.GetString() is string dtx && dtx.Length > 0)
@@ -224,7 +227,7 @@ public class GatewayClient : IDisposable
                     if (_activeStreamType == "chat")
                         OnStreamReset?.Invoke();
                     _activeStreamType = "agent";
-                    OnDeltaText?.Invoke(dtx);
+                    OnDeltaText?.Invoke(agSessionKey, dtx);
                 }
             }
             if (stream == "lifecycle" && payload.TryGetProperty("data", out var ld))
@@ -233,7 +236,7 @@ public class GatewayClient : IDisposable
                 {
                     Logger.Info("Stream: agent lifecycle end — clearing");
                     _activeStreamType = null;
-                    OnStreamComplete?.Invoke();
+                    OnStreamComplete?.Invoke(agSessionKey);
                 }
             }
             return;

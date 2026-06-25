@@ -135,15 +135,28 @@ public class MainViewModel : INotifyPropertyChanged
                 AddSystemMessage($"连接断开: {reason}");
                 _ = Task.Run(async () => { await Task.Delay(3000); await SafeInvokeAsync(() => _ = ConnectAsync(token)); });
             });
-            _client.OnDeltaText += (text) => SafeInvoke(() =>
+            _client.OnDeltaText += (sessionKey, text) => SafeInvoke(async () =>
             {
-                // 流式已结束（OnStreamComplete 已将 IsStreaming 置 false）后仍补发的末尾 delta 会重复累积，
-                // 导致渲染完成后末尾几个字重复。此处丢弃迟到的 delta。
+                // 只处理当前选中 session 的事件
+                if (sessionKey != _sessionKey) return;
+
+                // Web 端触发（非本地发送）：自动加载用户消息并开始流式
                 if (!IsStreaming)
                 {
-                    Logger.Info($"Delta dropped (stream already complete): len={text.Length}");
-                    return;
+                    Logger.Info($"External stream detected for session {sessionKey}, loading recent history");
+                    await LoadRecentHistoryAsync();
+                    _currentAiMessage = "";
+                    _lastDeltaText = "";
+                    var aiMsg = new ChatMessage { Role = ChatRole.Assistant, Content = "", IsStreaming = true };
+                    Messages.Add(aiMsg);
+                    IsStreaming = true;
+                    ThinkingText = "思考中...";
+                    ResetStreamTimeout();
+                    OnMessageUpdated?.Invoke();
                 }
+
+                if (!IsStreaming) return;
+
                 // Skip consecutive identical substantial deltas (covers remaining duplication paths)
                 if (text.Length > 3 && text == _lastDeltaText)
                 {
@@ -176,7 +189,11 @@ public class MainViewModel : INotifyPropertyChanged
                 if (status == "started") ThinkingText = $"正在使用工具: {name}...";
                 else if (status == "completed") { ThinkingText = "思考中..."; ResetStreamTimeout(); }
             });
-            _client.OnStreamComplete += () => SafeInvoke(StopStreaming);
+            _client.OnStreamComplete += (sessionKey) => SafeInvoke(() =>
+            {
+                if (sessionKey != _sessionKey) return;
+                StopStreaming();
+            });
             _client.OnError += (msg) => SafeInvoke(() => AddSystemMessage($"错误: {msg}"));
 
             await _client.ConnectAsync();
@@ -399,81 +416,7 @@ public class MainViewModel : INotifyPropertyChanged
 
             var historyMessages = new List<ChatMessage>();
             foreach (var m in msgsEl.EnumerateArray())
-            {
-                var role = "assistant";
-                if (m.TryGetProperty("role", out var r))
-                {
-                    if (r.ValueKind == JsonValueKind.String)
-                        role = r.GetString() ?? "assistant";
-                    else if (r.ValueKind == JsonValueKind.Array && r.GetArrayLength() > 0
-                        && r[0].ValueKind == JsonValueKind.String)
-                        role = r[0].GetString() ?? "assistant";
-                }
-
-                var content = "";
-                if (m.TryGetProperty("content", out var c))
-                {
-                    if (c.ValueKind == JsonValueKind.String)
-                    {
-                        content = c.GetString() ?? "";
-                    }
-                    else if (c.ValueKind == JsonValueKind.Array)
-                    {
-                        var sb = new System.Text.StringBuilder();
-                        foreach (var block in c.EnumerateArray())
-                        {
-                            if (block.TryGetProperty("text", out var bt)
-                                && bt.ValueKind == JsonValueKind.String)
-                                sb.AppendLine(bt.GetString());
-                            else if (block.TryGetProperty("content", out var bc)
-                                && bc.ValueKind == JsonValueKind.String)
-                                sb.AppendLine(bc.GetString());
-                        }
-                        content = sb.ToString().TrimEnd('\r', '\n');
-                    }
-                }
-                if (string.IsNullOrEmpty(content)
-                    && m.TryGetProperty("text", out var txt)
-                    && txt.ValueKind == JsonValueKind.String)
-                    content = txt.GetString() ?? "";
-
-                var id = "";
-                if (m.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
-                    id = idEl.GetString() ?? "";
-
-                var chatRole = role.ToLowerInvariant() switch
-                {
-                    "user" => ChatRole.User,
-                    "system" => ChatRole.System,
-                    "toolresult" => ChatRole.System,
-                    "tool_use" => ChatRole.Assistant,
-                    _ => ChatRole.Assistant
-                };
-
-                var ts = DateTime.Now;
-                if (m.TryGetProperty("timestamp", out var tsEl))
-                {
-                    if (tsEl.ValueKind == JsonValueKind.Number)
-                    {
-                        var ms = tsEl.TryGetInt64(out var v) ? v : (long)tsEl.GetDouble();
-                        try { ts = DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime; } catch { }
-                    }
-                    else if (tsEl.ValueKind == JsonValueKind.String
-                        && DateTime.TryParse(tsEl.GetString(), out var parsed))
-                    {
-                        ts = parsed;
-                    }
-                }
-
-                historyMessages.Add(new ChatMessage
-                {
-                    Id = string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N")[..8] : id,
-                    Role = chatRole,
-                    Content = content,
-                    Timestamp = ts,
-                    IsStreaming = false
-                });
-            }
+                historyMessages.Add(ParseHistoryMessage(m));
 
             if (historyMessages.Count == 0)
             {
@@ -521,6 +464,129 @@ public class MainViewModel : INotifyPropertyChanged
         {
             IsLoadingHistory = false;
         }
+    }
+
+    /// <summary>
+    /// 从 chat.history 返回的单个 JsonElement 解析为 ChatMessage。
+    /// </summary>
+    private static ChatMessage ParseHistoryMessage(JsonElement m)
+    {
+        var role = "assistant";
+        if (m.TryGetProperty("role", out var r))
+        {
+            if (r.ValueKind == JsonValueKind.String)
+                role = r.GetString() ?? "assistant";
+            else if (r.ValueKind == JsonValueKind.Array && r.GetArrayLength() > 0
+                && r[0].ValueKind == JsonValueKind.String)
+                role = r[0].GetString() ?? "assistant";
+        }
+
+        var content = "";
+        if (m.TryGetProperty("content", out var c))
+        {
+            if (c.ValueKind == JsonValueKind.String)
+            {
+                content = c.GetString() ?? "";
+            }
+            else if (c.ValueKind == JsonValueKind.Array)
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (var block in c.EnumerateArray())
+                {
+                    if (block.TryGetProperty("text", out var bt)
+                        && bt.ValueKind == JsonValueKind.String)
+                        sb.AppendLine(bt.GetString());
+                    else if (block.TryGetProperty("content", out var bc)
+                        && bc.ValueKind == JsonValueKind.String)
+                        sb.AppendLine(bc.GetString());
+                }
+                content = sb.ToString().TrimEnd('\r', '\n');
+            }
+        }
+        if (string.IsNullOrEmpty(content)
+            && m.TryGetProperty("text", out var txt)
+            && txt.ValueKind == JsonValueKind.String)
+            content = txt.GetString() ?? "";
+
+        var id = "";
+        if (m.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
+            id = idEl.GetString() ?? "";
+
+        var chatRole = role.ToLowerInvariant() switch
+        {
+            "user" => ChatRole.User,
+            "system" => ChatRole.System,
+            "toolresult" => ChatRole.System,
+            "tool_use" => ChatRole.Assistant,
+            _ => ChatRole.Assistant
+        };
+
+        var ts = DateTime.Now;
+        if (m.TryGetProperty("timestamp", out var tsEl))
+        {
+            if (tsEl.ValueKind == JsonValueKind.Number)
+            {
+                var ms = tsEl.TryGetInt64(out var v) ? v : (long)tsEl.GetDouble();
+                try { ts = DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime; } catch { }
+            }
+            else if (tsEl.ValueKind == JsonValueKind.String
+                && DateTime.TryParse(tsEl.GetString(), out var parsed))
+            {
+                ts = parsed;
+            }
+        }
+
+        return new ChatMessage
+        {
+            Id = string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N")[..8] : id,
+            Role = chatRole,
+            Content = content,
+            Timestamp = ts,
+            IsStreaming = false
+        };
+    }
+
+    /// <summary>
+    /// 加载当前会话最近历史消息（由 Web 端外部事件触发，轻量版）。
+    /// </summary>
+    private async Task LoadRecentHistoryAsync()
+    {
+        if (_client == null || !IsConnected) return;
+        try
+        {
+            var ps = new Dictionary<string, object>
+            {
+                ["sessionKey"] = _sessionKey,
+                ["limit"] = 10
+            };
+            var result = await _client.SendRpcAsync("chat.history", ps);
+            if (result == null) return;
+
+            var payload = result.Value;
+            JsonElement msgsEl = default;
+            bool found = false;
+            if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("messages", out msgsEl))
+                found = true;
+            else if (payload.ValueKind == JsonValueKind.Array)
+            { msgsEl = payload; found = true; }
+            if (!found) return;
+
+            // 保留系统消息，替换用户/助手消息为最新历史
+            var systemMessages = Messages.Where(m => m.Role == ChatRole.System).ToList();
+            Messages.Clear();
+            foreach (var msg in systemMessages) Messages.Add(msg);
+
+            var historyMessages = new List<ChatMessage>();
+            foreach (var m in msgsEl.EnumerateArray())
+                historyMessages.Add(ParseHistoryMessage(m));
+
+            historyMessages.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
+            foreach (var hm in historyMessages)
+                Messages.Add(hm);
+
+            Logger.Info($"Recent history loaded: {historyMessages.Count} messages");
+        }
+        catch (Exception ex) { Logger.Error($"LoadRecentHistory failed: {ex.Message}"); }
     }
 
     /// <summary>
