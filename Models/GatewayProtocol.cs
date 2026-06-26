@@ -53,7 +53,12 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
     public string Content
     {
         get => _content;
-        set { _content = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Content))); }
+        set
+        {
+            _content = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Content)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSystemCollapsible)));
+        }
     }
 
     public DateTime Timestamp { get; set; } = DateTime.Now;
@@ -63,6 +68,25 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
     {
         get => _isStreaming;
         set { _isStreaming = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsStreaming))); }
+    }
+
+    public string ToolName { get; set; } = "";
+
+    public string CollapseTitle => string.IsNullOrEmpty(ToolName)
+        ? "系统消息"
+        : $"tool {ToolName}";
+
+    public bool IsSystemCollapsible =>
+        Role == ChatRole.System && (
+            !string.IsNullOrEmpty(ToolName) ||
+            Content.Split('\n', StringSplitOptions.None).Length > 10
+        );
+
+    private bool _isSystemExpanded;
+    public bool IsSystemExpanded
+    {
+        get => _isSystemExpanded;
+        set { _isSystemExpanded = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSystemExpanded))); }
     }
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;

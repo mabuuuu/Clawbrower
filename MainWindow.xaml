@@ -210,15 +210,88 @@
                                             HorizontalAlignment="Left"
                                             Background="#44333344"
                                             TextOptions.TextFormattingMode="Display">
-                                        <controls:MarkdownBlock MarkdownText="{Binding Content}"
-                                                                        IsStreaming="{Binding IsStreaming}"
-                                                                        Foreground="#EEEEEE">
-                                            <controls:MarkdownBlock.ContextMenu>
-                                                <ContextMenu>
-                                                    <MenuItem Header="复制" Click="CopyMessage_Click"/>
-                                                </ContextMenu>
-                                            </controls:MarkdownBlock.ContextMenu>
-                                        </controls:MarkdownBlock>
+                                        <StackPanel>
+                                            <!-- System collapsible panel (shown when Role=System && IsSystemCollapsible) -->
+                                            <StackPanel x:Name="SystemCollapsePanel" Visibility="Collapsed" MinWidth="360">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <ToggleButton x:Name="SystemToggle"
+                                                                  IsChecked="{Binding IsSystemExpanded, Mode=TwoWay}"
+                                                                  Width="18" Height="18"
+                                                                  VerticalAlignment="Center">
+                                                        <ToggleButton.Template>
+                                                            <ControlTemplate TargetType="ToggleButton">
+                                                                <Border Background="Transparent" Padding="2">
+                                                                    <TextBlock x:Name="Arrow"
+                                                                               Text="▶" FontSize="10"
+                                                                               Foreground="#99CCCCCC"
+                                                                               VerticalAlignment="Center"
+                                                                               HorizontalAlignment="Center"/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsChecked" Value="True">
+                                                                        <Setter TargetName="Arrow" Property="Text" Value="▼"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </ToggleButton.Template>
+                                                    </ToggleButton>
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding CollapseTitle}"
+                                                               FontSize="11"
+                                                               Foreground="#99CCCCCC"
+                                                               VerticalAlignment="Center"
+                                                               Margin="4,0,0,0"/>
+                                                </Grid>
+                                                <Border Visibility="{Binding IsSystemExpanded, Converter={StaticResource BoolToVis}}"
+                                                        Margin="0,4,0,0">
+                                                    <StackPanel>
+                                                        <controls:MarkdownBlock MarkdownText="{Binding Content}"
+                                                                                IsStreaming="{Binding IsStreaming}"
+                                                                                Foreground="#EEEEEE">
+                                                            <controls:MarkdownBlock.ContextMenu>
+                                                                <ContextMenu>
+                                                                    <MenuItem Header="复制" Click="CopyMessage_Click"/>
+                                                                </ContextMenu>
+                                                            </controls:MarkdownBlock.ContextMenu>
+                                                        </controls:MarkdownBlock>
+                                                        <ToggleButton IsChecked="{Binding IsSystemExpanded, Mode=TwoWay}"
+                                                                      HorizontalAlignment="Right"
+                                                                      Margin="0,4,0,0"
+                                                                      Cursor="Hand">
+                                                            <ToggleButton.Template>
+                                                                <ControlTemplate TargetType="ToggleButton">
+                                                                    <Border Background="Transparent" Padding="4,2">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="折叠" FontSize="10"
+                                                                                       Foreground="#99CCCCCC"
+                                                                                       VerticalAlignment="Center"/>
+                                                                            <TextBlock Text=" ▲" FontSize="10"
+                                                                                       Foreground="#99CCCCCC"
+                                                                                       VerticalAlignment="Center"/>
+                                                                        </StackPanel>
+                                                                    </Border>
+                                                                </ControlTemplate>
+                                                            </ToggleButton.Template>
+                                                        </ToggleButton>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                            <!-- Default content -->
+                                            <controls:MarkdownBlock x:Name="ContentMarkdown"
+                                                                    MarkdownText="{Binding Content}"
+                                                                    IsStreaming="{Binding IsStreaming}"
+                                                                    Foreground="#EEEEEE">
+                                                <controls:MarkdownBlock.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="复制" Click="CopyMessage_Click"/>
+                                                    </ContextMenu>
+                                                </controls:MarkdownBlock.ContextMenu>
+                                            </controls:MarkdownBlock>
+                                        </StackPanel>
                                     </Border>
                                     <DataTemplate.Triggers>
                                         <DataTrigger Binding="{Binding Role}" Value="User">
@@ -236,6 +309,14 @@
                                             <Setter TargetName="Bubble" Property="Padding" Value="8,3"/>
                                             <Setter TargetName="Bubble" Property="CornerRadius" Value="6"/>
                                         </DataTrigger>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding Role}" Value="System"/>
+                                                <Condition Binding="{Binding IsSystemCollapsible}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter TargetName="SystemCollapsePanel" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="ContentMarkdown" Property="Visibility" Value="Collapsed"/>
+                                        </MultiDataTrigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>

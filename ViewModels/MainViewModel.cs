@@ -521,6 +521,14 @@ public class MainViewModel : INotifyPropertyChanged
             _ => ChatRole.Assistant
         };
 
+        var toolName = "";
+        if (role.Equals("toolResult", StringComparison.OrdinalIgnoreCase)
+            && m.TryGetProperty("toolName", out var tnEl)
+            && tnEl.ValueKind == JsonValueKind.String)
+        {
+            toolName = tnEl.GetString() ?? "";
+        }
+
         var ts = DateTime.Now;
         if (m.TryGetProperty("timestamp", out var tsEl))
         {
@@ -540,6 +548,7 @@ public class MainViewModel : INotifyPropertyChanged
         {
             Id = string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N")[..8] : id,
             Role = chatRole,
+            ToolName = toolName,
             Content = content,
             Timestamp = ts,
             IsStreaming = false

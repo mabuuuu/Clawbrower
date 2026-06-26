@@ -16,6 +16,7 @@ public class GatewayClient : IDisposable
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement?>> _pending = new();
     private string? _deviceToken;
     private string? _activeStreamType; // "chat" or "agent" — prevents dual-event duplication
+    private bool _streamEnded; // true after stream complete — skip residual chat deltas
 
     public bool IsConnected => _ws?.State == WebSocketState.Open && _handshakeDone;
     private volatile bool _handshakeDone;
@@ -77,6 +78,7 @@ public class GatewayClient : IDisposable
 
     public async Task<string> SendChatAsync(string sessionKey, string content)
     {
+        _streamEnded = false;
         var id = NextId();
         var frame = new Dictionary<string, object>
         {
@@ -196,15 +198,23 @@ public class GatewayClient : IDisposable
 
             if (payload.TryGetProperty("deltaText", out var dt) && dt.GetString() is string txt && txt.Length > 0)
             {
-                if (_activeStreamType != "chat")
-                    Logger.Info("Stream: chat (new stream)");
-                _activeStreamType = "chat";
-                OnDeltaText?.Invoke(sessionKey, txt);
+                if (_streamEnded)
+                {
+                    Logger.Info($"Stream ended, skipping chat delta [{txt.Length}]");
+                }
+                else
+                {
+                    if (_activeStreamType != "chat")
+                        Logger.Info("Stream: chat (new stream)");
+                    _activeStreamType = "chat";
+                    OnDeltaText?.Invoke(sessionKey, txt);
+                }
             }
             if (payload.TryGetProperty("state", out var st) && st.GetString() == "final")
             {
                 Logger.Info("Stream: chat final — clearing");
                 _activeStreamType = null;
+                _streamEnded = false;
                 OnStreamComplete?.Invoke(sessionKey);
             }
             return;
@@ -236,6 +246,7 @@ public class GatewayClient : IDisposable
                 {
                     Logger.Info("Stream: agent lifecycle end — clearing");
                     _activeStreamType = null;
+                    _streamEnded = true;
                     OnStreamComplete?.Invoke(agSessionKey);
                 }
             }
