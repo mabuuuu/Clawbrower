@@ -70,11 +70,15 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
         set { _isStreaming = value; PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsStreaming))); }
     }
 
+    public string ToolCallId { get; set; } = "";
     public string ToolName { get; set; } = "";
+    public string ToolInput { get; set; } = "";
 
     public string CollapseTitle => string.IsNullOrEmpty(ToolName)
         ? "系统消息"
-        : $"tool {ToolName}";
+        : string.IsNullOrEmpty(ToolInput)
+            ? $"tool {ToolName}"
+            : $"tool {ToolName}: {ToolInput}";
 
     public bool IsSystemCollapsible =>
         Role == ChatRole.System && (

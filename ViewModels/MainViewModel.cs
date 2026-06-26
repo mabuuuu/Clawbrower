@@ -189,6 +189,56 @@ public class MainViewModel : INotifyPropertyChanged
                 if (status == "started") ThinkingText = $"正在使用工具: {name}...";
                 else if (status == "completed") { ThinkingText = "思考中..."; ResetStreamTimeout(); }
             });
+            _client.OnToolResult += (sessionKey, toolCallId, toolName, toolInput, output) => SafeInvoke(() =>
+            {
+                if (sessionKey != _sessionKey) return;
+                if (string.IsNullOrEmpty(toolInput) && string.IsNullOrEmpty(output)) return;
+
+                var content = string.IsNullOrEmpty(output)
+                    ? $"\n**TOOL INPUT:**\n{toolInput}"
+                    : $"\n**TOOL INPUT:**\n{toolInput}\n\n\n**TOOL OUTPUT:**\n{output}";
+
+                // 同 toolCallId 去重：已存在则在新 output 更长时更新（command 的 summary 优于 tool 的 meta）
+                for (int i = 0; i < Messages.Count; i++)
+                {
+                    if (Messages[i].Id == toolCallId)
+                    {
+                        if (output.Length > 0 && (string.IsNullOrEmpty(Messages[i].ToolInput) || output.Length > Messages[i].Content.Length))
+                        {
+                            Messages[i].ToolInput = toolInput;
+                            Messages[i].Content = content;
+                            OnMessageUpdated?.Invoke();
+                        }
+                        return;
+                    }
+                }
+
+                var msg = new ChatMessage
+                {
+                    Id = toolCallId,
+                    Role = ChatRole.System,
+                    ToolName = toolName,
+                    ToolInput = toolInput,
+                    Content = content,
+                    IsStreaming = false
+                };
+
+                // 插入到最后一条 Assistant 消息之前（工具结果应在助手回复之前）
+                int insertAt = Messages.Count;
+                for (int i = Messages.Count - 1; i >= 0; i--)
+                {
+                    if (Messages[i].Role == ChatRole.Assistant)
+                    {
+                        insertAt = i;
+                        break;
+                    }
+                }
+                if (insertAt == Messages.Count) Messages.Add(msg);
+                else Messages.Insert(insertAt, msg);
+
+                Logger.Info($"Tool result inserted: toolCallId={toolCallId}, name={toolName}, inputLen={toolInput.Length}, outputLen={output.Length}, at={insertAt}");
+                OnMessageUpdated?.Invoke();
+            });
             _client.OnStreamComplete += (sessionKey) => SafeInvoke(() =>
             {
                 if (sessionKey != _sessionKey) return;
@@ -427,6 +477,11 @@ public class MainViewModel : INotifyPropertyChanged
             // 历史消息按时间正序排列（最早在前）
             historyMessages.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
+            // tool_use → toolResult 关联，统一拼接 TOOL INPUT / TOOL OUTPUT 格式
+            var inputMap = BuildToolUseInputMap(msgsEl);
+            Logger.Info($"BuildToolUseInputMap: {inputMap.Count} entries");
+            CorrelateToolMessages(historyMessages, inputMap);
+
             // 客户端去重
             if (Messages.Count > 0)
             {
@@ -464,6 +519,97 @@ public class MainViewModel : INotifyPropertyChanged
         {
             IsLoadingHistory = false;
         }
+    }
+
+    /// <summary>
+    /// 从原始 JSON 中扫描所有 tool_use 块，建立 toolCallId → input 映射。
+    /// 覆盖两种形式：顶层 role=tool_use 消息，以及 assistant 消息 content 中的 toolCall 块。
+    /// </summary>
+    private static Dictionary<string, string> BuildToolUseInputMap(JsonElement msgsEl)
+    {
+        var map = new Dictionary<string, string>();
+        foreach (var m in msgsEl.EnumerateArray())
+        {
+            var role = "";
+            if (m.TryGetProperty("role", out var rEl)
+                && rEl.ValueKind == JsonValueKind.String)
+                role = rEl.GetString() ?? "";
+
+            // 形式 1：顶层 role=tool_use 消息
+            if (role.Equals("tool_use", StringComparison.OrdinalIgnoreCase))
+            {
+                var tci = m.TryGetProperty("toolCallId", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : "";
+                var input = "";
+                if (m.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.String)
+                    input = meta.GetString() ?? "";
+                else if (m.TryGetProperty("input", out var inp) && inp.ValueKind == JsonValueKind.String)
+                    input = inp.GetString() ?? "";
+                else if (m.TryGetProperty("args", out var arg) && arg.ValueKind == JsonValueKind.String)
+                    input = arg.GetString() ?? "";
+                if (!string.IsNullOrEmpty(tci) && !string.IsNullOrEmpty(input))
+                    map[tci] = input;
+            }
+
+            // 形式 2：assistant 消息 content 数组中嵌入的 toolCall 块
+            if (role.Equals("assistant", StringComparison.OrdinalIgnoreCase)
+                && m.TryGetProperty("content", out var c)
+                && c.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var block in c.EnumerateArray())
+                {
+                    if (!block.TryGetProperty("type", out var bt)
+                        || bt.GetString() != "toolCall")
+                        continue;
+
+                    var tci = block.TryGetProperty("id", out var idEl)
+                        && idEl.ValueKind == JsonValueKind.String ? idEl.GetString() ?? "" : "";
+                    // exec 类工具：取 arguments.command 作为简洁命令；其他工具取 arguments 的 JSON
+                    var input = "";
+                    if (block.TryGetProperty("arguments", out var args)
+                        && args.TryGetProperty("command", out var cmd)
+                        && cmd.ValueKind == JsonValueKind.String)
+                        input = cmd.GetString() ?? "";
+                    if (string.IsNullOrEmpty(input)
+                        && block.TryGetProperty("arguments", out var args2))
+                        input = args2.GetRawText();
+                    if (string.IsNullOrEmpty(input)
+                        && block.TryGetProperty("partialArgs", out var pa)
+                        && pa.ValueKind == JsonValueKind.String)
+                        input = pa.GetString() ?? "";
+                    if (!string.IsNullOrEmpty(tci) && !string.IsNullOrEmpty(input))
+                        map[tci] = input;
+                }
+            }
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// 关联 tool_use → toolResult：将外部构建的 inputMap 中同 toolCallId 的输入赋值给 toolResult，
+    /// 并统一拼接 TOOL INPUT / TOOL OUTPUT 格式。
+    /// </summary>
+    private static void CorrelateToolMessages(List<ChatMessage> historyMessages, Dictionary<string, string> inputMap)
+    {
+        var updatedCount = 0;
+        foreach (var msg in historyMessages)
+        {
+            if (msg.Role != ChatRole.System || string.IsNullOrEmpty(msg.ToolName))
+                continue;
+
+            if (!string.IsNullOrEmpty(msg.ToolCallId)
+                && inputMap.TryGetValue(msg.ToolCallId, out var input))
+            {
+                msg.ToolInput = input;
+                msg.Content = $"\n**TOOL INPUT:**\n{input}\n\n\n**TOOL OUTPUT:**\n{msg.Content}";
+                updatedCount++;
+            }
+            else if (!string.IsNullOrEmpty(msg.Content))
+            {
+                msg.Content = $"\n\n**TOOL OUTPUT:**\n{msg.Content}";
+            }
+        }
+
+        Logger.Info($"CorrelateToolMessages: {inputMap.Count} tool_use inputs → {updatedCount} toolResults updated");
     }
 
     /// <summary>
@@ -521,7 +667,27 @@ public class MainViewModel : INotifyPropertyChanged
             _ => ChatRole.Assistant
         };
 
+        // 提取 toolCallId（所有消息类型通用）
+        var toolCallId = "";
+        if (m.TryGetProperty("toolCallId", out var tciEl)
+            && tciEl.ValueKind == JsonValueKind.String)
+            toolCallId = tciEl.GetString() ?? "";
+
         var toolName = "";
+        var toolInput = "";
+
+        // tool_use：提取命令
+        if (role.Equals("tool_use", StringComparison.OrdinalIgnoreCase))
+        {
+            if (m.TryGetProperty("meta", out var metaEl) && metaEl.ValueKind == JsonValueKind.String)
+                toolInput = metaEl.GetString() ?? "";
+            else if (m.TryGetProperty("input", out var inEl) && inEl.ValueKind == JsonValueKind.String)
+                toolInput = inEl.GetString() ?? "";
+            else if (m.TryGetProperty("args", out var argsEl) && argsEl.ValueKind == JsonValueKind.String)
+                toolInput = argsEl.GetString() ?? "";
+        }
+
+        // toolResult：提取工具名（内容格式由后续关联步骤统一拼接）
         if (role.Equals("toolResult", StringComparison.OrdinalIgnoreCase)
             && m.TryGetProperty("toolName", out var tnEl)
             && tnEl.ValueKind == JsonValueKind.String)
@@ -548,7 +714,9 @@ public class MainViewModel : INotifyPropertyChanged
         {
             Id = string.IsNullOrEmpty(id) ? Guid.NewGuid().ToString("N")[..8] : id,
             Role = chatRole,
+            ToolCallId = toolCallId,
             ToolName = toolName,
+            ToolInput = toolInput,
             Content = content,
             Timestamp = ts,
             IsStreaming = false
@@ -590,6 +758,12 @@ public class MainViewModel : INotifyPropertyChanged
                 historyMessages.Add(ParseHistoryMessage(m));
 
             historyMessages.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
+
+            // tool_use → toolResult 关联，统一拼接 TOOL INPUT / TOOL OUTPUT 格式
+            var inputMap = BuildToolUseInputMap(msgsEl);
+            Logger.Info($"BuildToolUseInputMap: {inputMap.Count} entries");
+            CorrelateToolMessages(historyMessages, inputMap);
+
             foreach (var hm in historyMessages)
                 Messages.Add(hm);
 

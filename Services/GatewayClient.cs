@@ -25,6 +25,7 @@ public class GatewayClient : IDisposable
     public event Action<string>? OnDisconnected;
     public event Action<string, string>? OnDeltaText; // (sessionKey, deltaText)
     public event Action<string, string>? OnToolEvent;
+    public event Action<string, string, string, string, string>? OnToolResult; // (sessionKey, toolCallId, toolName, toolInput, output)
     public event Action<string>? OnStreamComplete; // (sessionKey)
     public event Action<string>? OnError;
     public event Action? OnStreamReset;
@@ -248,6 +249,29 @@ public class GatewayClient : IDisposable
                     _activeStreamType = null;
                     _streamEnded = true;
                     OnStreamComplete?.Invoke(agSessionKey);
+                }
+            }
+            if (stream == "item" && payload.TryGetProperty("data", out var itemData))
+            {
+                var kind = itemData.TryGetProperty("kind", out var kEl) ? kEl.GetString() ?? "" : "";
+                var phase = itemData.TryGetProperty("phase", out var pEl) ? pEl.GetString() ?? "" : "";
+                var toolCallId = itemData.TryGetProperty("toolCallId", out var tciEl) ? tciEl.GetString() ?? "" : "";
+                var name = itemData.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+
+                // kind="command" + phase="end" 携带 summary（结果）和 meta（命令），是最佳时机
+                if (kind == "command" && phase == "end" && !string.IsNullOrEmpty(toolCallId))
+                {
+                    var summary = itemData.TryGetProperty("summary", out var sumEl) ? sumEl.GetString() ?? "" : "";
+                    var meta = itemData.TryGetProperty("meta", out var metaEl) ? metaEl.GetString() ?? "" : "";
+                    Logger.Info($"Tool result: toolCallId={toolCallId}, name={name}, inputLen={meta.Length}, outputLen={summary.Length}");
+                    OnToolResult?.Invoke(agSessionKey, toolCallId, name, meta, summary);
+                }
+                // kind="tool" + phase="end" 兜底：非 command 类工具（无 summary），仅传命令
+                else if (kind == "tool" && phase == "end" && !string.IsNullOrEmpty(toolCallId))
+                {
+                    var meta = itemData.TryGetProperty("meta", out var metaEl) ? metaEl.GetString() ?? "" : "";
+                    Logger.Info($"Tool end (fallback): toolCallId={toolCallId}, name={name}, inputLen={meta.Length}");
+                    OnToolResult?.Invoke(agSessionKey, toolCallId, name, meta, "");
                 }
             }
             return;
