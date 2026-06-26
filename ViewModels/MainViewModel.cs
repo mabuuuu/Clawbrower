@@ -196,7 +196,7 @@ public class MainViewModel : INotifyPropertyChanged
 
                 var content = string.IsNullOrEmpty(output)
                     ? $"\n**TOOL INPUT:**\n{toolInput}"
-                    : $"\n**TOOL INPUT:**\n{toolInput}\n\n\n**TOOL OUTPUT:**\n{output}";
+                    : $"\n**TOOL INPUT:**\n{toolInput}\n\n---\n**TOOL OUTPUT:**\n{output}";
 
                 // 同 toolCallId 去重：已存在则在新 output 更长时更新（command 的 summary 优于 tool 的 meta）
                 for (int i = 0; i < Messages.Count; i++)
@@ -366,6 +366,7 @@ public class MainViewModel : INotifyPropertyChanged
                 ["limit"] = 20
             });
             Logger.Info($"sessions.list returned: {result != null}");
+            if (result != null) Logger.Info($"sessions.list raw: {result.Value.GetRawText()}");
 
             if (result != null && result.Value.TryGetProperty("sessions", out var arr))
             {
@@ -374,6 +375,10 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     var key = s.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
                     if (string.IsNullOrEmpty(key) || existing.Contains(key)) continue;
+
+                    // 排除非聊天会话：cron、subagent
+                    if (key.Contains(":cron") || key.Contains(":subagent:")) continue;
+
                     var label = s.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() ?? "" : "";
                     if (string.IsNullOrEmpty(label)) label = key[..Math.Min(key.Length, 20)];
                     Sessions.Add(new SessionInfo { Key = key, Label = label });
@@ -466,7 +471,14 @@ public class MainViewModel : INotifyPropertyChanged
 
             var historyMessages = new List<ChatMessage>();
             foreach (var m in msgsEl.EnumerateArray())
-                historyMessages.Add(ParseHistoryMessage(m));
+            {
+                if (m.TryGetProperty("role", out var rEl) && rEl.GetString() == "tool_use")
+                    continue;
+                var msg = ParseHistoryMessage(m);
+                if (string.IsNullOrEmpty(msg.Content) && msg.Role == ChatRole.Assistant)
+                    continue;
+                historyMessages.Add(msg);
+            }
 
             if (historyMessages.Count == 0)
             {
@@ -600,7 +612,7 @@ public class MainViewModel : INotifyPropertyChanged
                 && inputMap.TryGetValue(msg.ToolCallId, out var input))
             {
                 msg.ToolInput = input;
-                msg.Content = $"\n**TOOL INPUT:**\n{input}\n\n\n**TOOL OUTPUT:**\n{msg.Content}";
+                msg.Content = $"\n**TOOL INPUT:**\n{input}\n\n---\n**TOOL OUTPUT:**\n{msg.Content}";
                 updatedCount++;
             }
             else if (!string.IsNullOrEmpty(msg.Content))
@@ -755,7 +767,14 @@ public class MainViewModel : INotifyPropertyChanged
 
             var historyMessages = new List<ChatMessage>();
             foreach (var m in msgsEl.EnumerateArray())
-                historyMessages.Add(ParseHistoryMessage(m));
+            {
+                if (m.TryGetProperty("role", out var rEl) && rEl.GetString() == "tool_use")
+                    continue;
+                var msg = ParseHistoryMessage(m);
+                if (string.IsNullOrEmpty(msg.Content) && msg.Role == ChatRole.Assistant)
+                    continue;
+                historyMessages.Add(msg);
+            }
 
             historyMessages.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
