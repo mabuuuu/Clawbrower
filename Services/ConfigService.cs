@@ -52,11 +52,15 @@ public static class ConfigService
     public static string? GetToken() => Load().GatewayToken;
     public static void SetToken(string token) { var s = Load(); s.GatewayToken = token; Save(); }
 
+    public static string GetGatewayUrl() => Load().GatewayUrl ?? "ws://127.0.0.1:18789";
+    public static void SetGatewayUrl(string url) { var s = Load(); s.GatewayUrl = url; Save(); }
+
 }
 
 public class Settings
 {
     public string? GatewayToken { get; set; }
+    public string? GatewayUrl { get; set; } = "ws://127.0.0.1:18789";
     public string? DeviceToken { get; set; }
     public double Opacity { get; set; } = 0.80;
     public double TextOpacity { get; set; } = 1.0;

@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows;
 using Clawbrower.Services;
+using Clawbrower.Dialogs;
 using WF = System.Windows.Forms;
 using FontStyle = System.Drawing.FontStyle;
 
@@ -52,6 +53,7 @@ public partial class App : System.Windows.Application
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("显示/隐藏", null, (_, _) => ToggleWindow());
         menu.Items.Add("设置", null, (_, _) => OpenSettings());
+        menu.Items.Add("连接设置...", null, (_, _) => OpenConnectionSettings());
         menu.Items.Add(new WF.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ShutdownApp());
         _trayIcon.ContextMenuStrip = menu;
@@ -96,6 +98,35 @@ public partial class App : System.Windows.Application
             win.Owner = _mainWindow;
             win.ShowDialog();
         });
+    }
+
+    private void OpenConnectionSettings()
+    {
+        _mainWindow?.Dispatcher.Invoke(() =>
+        {
+            var currentUrl = ConfigService.GetGatewayUrl();
+            var (ip, port) = ParseGatewayUrl(currentUrl);
+
+            var (newIp, newPort) = ConnectionDialog.Show(_mainWindow, ip, port);
+            if (newIp == null || newPort == null) return; // cancelled
+
+            var url = $"ws://{newIp}:{newPort}";
+            ConfigService.SetGatewayUrl(url);
+            _ = _mainWindow!.Reconnect();
+        });
+    }
+
+    private static (string ip, string port) ParseGatewayUrl(string url)
+    {
+        try
+        {
+            var withoutScheme = url.Replace("ws://", "").Replace("wss://", "");
+            var colonIdx = withoutScheme.LastIndexOf(':');
+            if (colonIdx > 0)
+                return (withoutScheme[..colonIdx], withoutScheme[(colonIdx + 1)..]);
+        }
+        catch { }
+        return ("127.0.0.1", "18789");
     }
 
     private void ShutdownApp()

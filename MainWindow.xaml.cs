@@ -286,6 +286,12 @@ public partial class MainWindow : Window
         ApplyTextStyle();
     }
 
+    public async Task Reconnect()
+    {
+        Logger.Info("Reconnect requested (gateway url may have changed)");
+        await _vm.ReconnectAsync();
+    }
+
     private void ApplyTextStyle()
     {
         Dispatcher.BeginInvoke(() =>

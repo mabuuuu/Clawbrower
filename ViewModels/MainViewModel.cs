@@ -12,7 +12,7 @@ public enum AppState { WaitingForToken, Connecting, Connected, Disconnected }
 
 public class MainViewModel : INotifyPropertyChanged
 {
-    private readonly string _gatewayUrl = "ws://127.0.0.1:18789";
+    private string _gatewayUrl = ConfigService.GetGatewayUrl();
     private string _sessionKey = "agent:main:main";
     private GatewayClient? _client;
     private AppState _state;
@@ -255,6 +255,21 @@ public class MainViewModel : INotifyPropertyChanged
             AddSystemMessage($"连接失败: {ex.Message}");
             _ = Task.Run(async () => { await Task.Delay(5000); await SafeInvokeAsync(() => _ = ConnectAsync(token)); });
         }
+    }
+
+    public async Task ReconnectAsync()
+    {
+        _gatewayUrl = ConfigService.GetGatewayUrl();
+        var token = ConfigService.GetToken();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            AddSystemMessage("未找到 Token，请先输入 Token");
+            return;
+        }
+        _client?.Dispose();
+        _client = null;
+        AddSystemMessage($"正在重连到 {_gatewayUrl}...");
+        await ConnectAsync(token);
     }
 
     private void StopStreaming()
