@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using Clawbrower.Models;
 using Clawbrower.Services;
@@ -210,8 +211,29 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             Padding = new Thickness(0),
             HorizontalAlignment = System.Windows.HorizontalAlignment.Left
         };
+        viewer.PreviewMouseWheel += OnViewerPreviewMouseWheel;
 
         ContentRoot.Children.Add(viewer);
+    }
+
+    private static void OnViewerPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is not DependencyObject d) return;
+        DependencyObject? p = VisualTreeHelper.GetParent(d);
+        while (p != null)
+        {
+            if (p is ScrollViewer sv)
+            {
+                e.Handled = true;
+                var args = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+                {
+                    RoutedEvent = UIElement.MouseWheelEvent
+                };
+                sv.RaiseEvent(args);
+                return;
+            }
+            p = VisualTreeHelper.GetParent(p);
+        }
     }
 
     private static double EstimateContentWidth(string markdown)
