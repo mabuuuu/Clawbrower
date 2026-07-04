@@ -8,7 +8,7 @@ using WpfApp = System.Windows.Application;
 
 namespace Clawbrower.ViewModels;
 
-public enum AppState { WaitingForToken, Connecting, Connected, Disconnected }
+public enum AppState { WaitingForToken, Connecting, Connected, Disconnected, PairingPending }
 
 public class MainViewModel : INotifyPropertyChanged
 {
@@ -19,6 +19,11 @@ public class MainViewModel : INotifyPropertyChanged
     private string _currentAiMessage = "";
     private string _lastDeltaText = "";
     private CancellationTokenSource? _streamTimeoutCts;
+    private int _reconnectCount;
+
+    // 配对轮询
+    private bool _pairingPolling;
+    private CancellationTokenSource? _pairingCts;
 
     // 历史记录加载相关状态
     private bool _isLoadingHistory;
@@ -75,10 +80,11 @@ public class MainViewModel : INotifyPropertyChanged
     public bool IsConnected => State == AppState.Connected;
     public string StatusText => State switch
     {
-        AppState.WaitingForToken => "等待输入 Token",
+        AppState.WaitingForToken => "等待配置认证信息",
         AppState.Connecting => "连接中...",
         AppState.Connected => "已连接",
         AppState.Disconnected => "未连接",
+        AppState.PairingPending => "等待管理员批准配对",
         _ => ""
     };
 
@@ -98,42 +104,61 @@ public class MainViewModel : INotifyPropertyChanged
         _currentSession = def;
         OnPropertyChanged(nameof(CurrentSession));
 
-        var savedToken = ConfigService.GetToken();
-        if (string.IsNullOrWhiteSpace(savedToken))
+        var cfg = ConfigService.Load();
+
+        if (cfg.UsePasswordAuth || !string.IsNullOrWhiteSpace(cfg.DeviceToken))
         {
-            State = AppState.WaitingForToken;
-            AddSystemMessage("欢迎使用 Clawbrower！");
-            AddSystemMessage("请直接粘贴 OpenClaw Gateway Token 并发送，Token 将安全保存在本地。");
-            AddSystemMessage("获取 Token：运行 openclaw status 或在配置文件中查看 gateway.auth.token");
+            _ = ConnectAsync();
+        }
+        else if (!string.IsNullOrWhiteSpace(ConfigService.GetToken()))
+        {
+            _ = ConnectAsync();
         }
         else
         {
-            _ = ConnectAsync(savedToken);
+            State = AppState.WaitingForToken;
+            AddSystemMessage("欢迎使用 Clawbrower！");
+            AddSystemMessage("请通过托盘菜单 → 连接设置，配置网关地址和密码。");
         }
     }
 
-    public async Task ConnectAsync(string token)
+    public async Task ConnectAsync(bool silent = false)
     {
         State = AppState.Connecting;
-        AddSystemMessage("正在连接 OpenClaw Gateway...");
-        Logger.Info("ConnectAsync with token");
+        if (!silent) AddSystemMessage("正在连接 OpenClaw Gateway...");
+        Logger.Info("ConnectAsync");
 
         try
         {
             _client?.Dispose();
-            _client = new GatewayClient(_gatewayUrl, token);
+            _client = new GatewayClient(_gatewayUrl);
             _client.OnConnected += () => SafeInvoke(async () =>
             {
+                _reconnectCount = 0;
                 State = AppState.Connected;
                 AddSystemMessage("已连接到 OpenClaw Gateway");
                 await LoadSessionsAsync();
+            });
+            _client.OnPairingPending += (msg) => SafeInvoke(() =>
+            {
+                State = AppState.PairingPending;
+                if (!_pairingPolling)
+                {
+                    AddSystemMessage(msg);
+                    _ = StartPairingPoll();
+                }
+                else
+                {
+                    Logger.Info($"Pairing poll: still pending");
+                }
             });
             _client.OnDisconnected += (reason) => SafeInvoke(() =>
             {
                 State = AppState.Disconnected;
                 StopStreaming();
                 AddSystemMessage($"连接断开: {reason}");
-                _ = Task.Run(async () => { await Task.Delay(3000); await SafeInvokeAsync(() => _ = ConnectAsync(token)); });
+                if (!silent)
+                    _ = Task.Run(async () => { await Task.Delay(3000); await SafeInvokeAsync(() => _ = AutoReconnectAsync()); });
             });
             _client.OnDeltaText += (sessionKey, text) => SafeInvoke(async () =>
             {
@@ -250,26 +275,90 @@ public class MainViewModel : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            Logger.Error($"Connect failed: {ex.Message}");
+            var errMsg = ex.InnerException != null ? $"{ex.Message} -> {ex.InnerException.Message}" : ex.Message;
+            Logger.Error($"Connect failed: {errMsg}");
             State = AppState.Disconnected;
-            AddSystemMessage($"连接失败: {ex.Message}");
-            _ = Task.Run(async () => { await Task.Delay(5000); await SafeInvokeAsync(() => _ = ConnectAsync(token)); });
+            if (!silent) AddSystemMessage($"连接失败: {errMsg}");
+            if (!silent)
+                _ = Task.Run(async () => { await Task.Delay(5000); await SafeInvokeAsync(() => _ = AutoReconnectAsync()); });
         }
     }
 
     public async Task ReconnectAsync()
     {
+        // 手动重连时取消配对轮询
+        _pairingPolling = false;
+        _pairingCts?.Cancel();
+        _pairingCts = null;
+
+        // 手动重连时重置计数
+        _reconnectCount = 0;
         _gatewayUrl = ConfigService.GetGatewayUrl();
-        var token = ConfigService.GetToken();
-        if (string.IsNullOrWhiteSpace(token))
+
+        var cfg = ConfigService.Load();
+        if (!cfg.UsePasswordAuth && string.IsNullOrWhiteSpace(cfg.DeviceToken) && string.IsNullOrWhiteSpace(ConfigService.GetToken()))
         {
-            AddSystemMessage("未找到 Token，请先输入 Token");
+            AddSystemMessage("未找到认证信息，请先在连接设置中配置");
             return;
         }
         _client?.Dispose();
         _client = null;
         AddSystemMessage($"正在重连到 {_gatewayUrl}...");
-        await ConnectAsync(token);
+        await ConnectAsync();
+    }
+
+    private async Task AutoReconnectAsync()
+    {
+        _reconnectCount++;
+        if (_reconnectCount > 10)
+        {
+            AddSystemMessage($"已自动重连 {_reconnectCount - 1} 次，放弃。请检查网络后手动重连。");
+            return;
+        }
+
+        _gatewayUrl = ConfigService.GetGatewayUrl();
+        _client?.Dispose();
+        _client = null;
+        AddSystemMessage($"正在重连到 {_gatewayUrl}... (第 {_reconnectCount} 次)");
+        await ConnectAsync();
+    }
+
+    private async Task StartPairingPoll()
+    {
+        _pairingPolling = true;
+        _pairingCts = new CancellationTokenSource();
+        var ct = _pairingCts.Token;
+
+        Logger.Info("Pairing poll started (every 5s)");
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(5000, ct);
+            }
+            catch (OperationCanceledException) { break; }
+
+            if (!_pairingPolling || State != AppState.PairingPending) break;
+
+            try
+            {
+                Logger.Info("Pairing poll: retrying connect...");
+                await ConnectAsync(silent: true);
+                if (State == AppState.Connected)
+                {
+                    Logger.Info("Pairing poll: connected!");
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"Pairing poll error (will retry): {ex.Message}");
+            }
+        }
+
+        _pairingPolling = false;
+        Logger.Info("Pairing poll ended");
     }
 
     private void StopStreaming()
@@ -307,10 +396,7 @@ public class MainViewModel : INotifyPropertyChanged
         if (State == AppState.WaitingForToken)
         {
             InputText = "";
-            AddSystemMessage("Token 已收到，正在保存...");
-            ConfigService.SetToken(text);
-            AddSystemMessage("Token 已保存，开始连接...");
-            await ConnectAsync(text);
+            AddSystemMessage("请通过托盘菜单 → 连接设置，配置网关地址和密码。");
             return;
         }
 

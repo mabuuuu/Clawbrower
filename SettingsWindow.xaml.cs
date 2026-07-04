@@ -14,14 +14,6 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
     private readonly MainWindow _mainWindow;
     private bool _capturingHotkey;
 
-    private string _originalGatewayUrl;
-    private string _gatewayUrl;
-    public string GatewayUrl
-    {
-        get => _gatewayUrl;
-        set { _gatewayUrl = value; OnPropertyChanged(); }
-    }
-
     private string _textColor;
     public string TextColor
     {
@@ -60,7 +52,7 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
     }
 
     private ModifierKeys _hotkeyMod = ModifierKeys.Alt;
-    private Key _hotkeyKey = Key.C;
+    private Key _hotkeyKey = Key.Z;
 
     public SettingsWindow(MainWindow mainWindow)
     {
@@ -73,9 +65,6 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         _hotkeyKey = s.HotkeyKey;
         _hotkeyDisplay = HotkeyToString(_hotkeyMod, _hotkeyKey);
 
-        _gatewayUrl = s.GatewayUrl ?? "ws://127.0.0.1:18789";
-        _originalGatewayUrl = _gatewayUrl;
-
         InitializeComponent();
         DataContext = this;
 
@@ -87,24 +76,8 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
             c.TextColor = _textColor;
             c.HotkeyMod = _hotkeyMod;
             c.HotkeyKey = _hotkeyKey;
-            c.GatewayUrl = string.IsNullOrWhiteSpace(_gatewayUrl) ? "ws://127.0.0.1:18789" : _gatewayUrl.Trim();
             ConfigService.Save();
-
-            // Gateway 地址变更则断开重连
-            if (!string.Equals(_originalGatewayUrl, c.GatewayUrl, System.StringComparison.OrdinalIgnoreCase))
-            {
-                _ = _mainWindow.Reconnect();
-            }
         };
-    }
-
-    private void ReconnectButton_Click(object sender, RoutedEventArgs e)
-    {
-        var c = ConfigService.Load();
-        c.GatewayUrl = string.IsNullOrWhiteSpace(_gatewayUrl) ? "ws://127.0.0.1:18789" : _gatewayUrl.Trim();
-        ConfigService.Save();
-        _originalGatewayUrl = c.GatewayUrl;
-        _ = _mainWindow.Reconnect();
     }
 
     private void HotkeyBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -120,7 +93,6 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
 
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-        // Ignore modifier-only presses
         if (key == Key.LeftCtrl || key == Key.RightCtrl ||
             key == Key.LeftAlt || key == Key.RightAlt ||
             key == Key.LeftShift || key == Key.RightShift ||

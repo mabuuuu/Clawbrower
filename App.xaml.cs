@@ -42,6 +42,15 @@ public partial class App : System.Windows.Application
 
         _mainWindow = new MainWindow();
 
+        // 首次启动弹出连接设置
+        if (!ConfigService.Load().IsConfigured)
+        {
+            _mainWindow.Show();
+            OpenConnectionSettings();
+            // 设置完成后触发连接
+            _ = _mainWindow.Reconnect();
+        }
+
         _trayIcon = new WF.NotifyIcon
         {
             Icon = CreateTrayIcon(),
@@ -54,6 +63,7 @@ public partial class App : System.Windows.Application
         menu.Items.Add("显示/隐藏", null, (_, _) => ToggleWindow());
         menu.Items.Add("设置", null, (_, _) => OpenSettings());
         menu.Items.Add("连接设置...", null, (_, _) => OpenConnectionSettings());
+        menu.Items.Add("重连", null, (_, _) => _ = _mainWindow!.Reconnect());
         menu.Items.Add(new WF.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ShutdownApp());
         _trayIcon.ContextMenuStrip = menu;
@@ -104,29 +114,21 @@ public partial class App : System.Windows.Application
     {
         _mainWindow?.Dispatcher.Invoke(() =>
         {
-            var currentUrl = ConfigService.GetGatewayUrl();
-            var (ip, port) = ParseGatewayUrl(currentUrl);
+            var cfg = ConfigService.Load();
+            // 获取不含密码的原始 URL
+            var baseUrl = cfg.GatewayUrl ?? "ws://127.0.0.1:18789";
+            var result = ConnectionDialog.Show(_mainWindow, baseUrl, cfg.GatewayToken, cfg.GatewayPassword, cfg.UsePasswordAuth);
+            if (result == null) return; // cancelled
 
-            var (newIp, newPort) = ConnectionDialog.Show(_mainWindow, ip, port);
-            if (newIp == null || newPort == null) return; // cancelled
-
-            var url = $"ws://{newIp}:{newPort}";
-            ConfigService.SetGatewayUrl(url);
+            var c = ConfigService.Load();
+            c.GatewayUrl = string.IsNullOrWhiteSpace(result.GatewayUrl) ? "ws://127.0.0.1:18789" : result.GatewayUrl.Trim();
+            c.UsePasswordAuth = result.UsePasswordAuth;
+            c.GatewayToken = result.UsePasswordAuth ? null : result.GatewayToken?.Trim();
+            c.GatewayPassword = result.UsePasswordAuth ? result.GatewayPassword : null;
+            c.IsConfigured = true;
+            ConfigService.Save();
             _ = _mainWindow!.Reconnect();
         });
-    }
-
-    private static (string ip, string port) ParseGatewayUrl(string url)
-    {
-        try
-        {
-            var withoutScheme = url.Replace("ws://", "").Replace("wss://", "");
-            var colonIdx = withoutScheme.LastIndexOf(':');
-            if (colonIdx > 0)
-                return (withoutScheme[..colonIdx], withoutScheme[(colonIdx + 1)..]);
-        }
-        catch { }
-        return ("127.0.0.1", "18789");
     }
 
     private void ShutdownApp()
