@@ -1,6 +1,7 @@
 # 编译输出
 bin/
 obj/
+publish/
 
 # IDE 配置
 .idea/
