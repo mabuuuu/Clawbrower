@@ -467,23 +467,28 @@ public class MainViewModel : INotifyPropertyChanged
                 ["limit"] = 20
             });
             Logger.Info($"sessions.list returned: {result != null}");
-            if (result != null) Logger.Info($"sessions.list raw: {result.Value.GetRawText()}");
 
-            if (result != null && result.Value.TryGetProperty("sessions", out var arr))
+            if (result != null)
             {
-                var existing = new HashSet<string>(Sessions.Select(s => s.Key));
-                foreach (var s in arr.EnumerateArray())
+                Logger.Info($"sessions.list raw: {result[..Math.Min(result.Length, 500)]}");
+                using var doc = JsonDocument.Parse(result);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("sessions", out var arr))
                 {
-                    var key = s.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
-                    if (string.IsNullOrEmpty(key) || existing.Contains(key)) continue;
+                    var existing = new HashSet<string>(Sessions.Select(s => s.Key));
+                    foreach (var s in arr.EnumerateArray())
+                    {
+                        var key = s.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+                        if (string.IsNullOrEmpty(key) || existing.Contains(key)) continue;
 
-                    // 排除非聊天会话：cron、subagent
-                    if (key.Contains(":cron") || key.Contains(":subagent:")) continue;
+                        // 排除非聊天会话：cron、subagent
+                        if (key.Contains(":cron") || key.Contains(":subagent:")) continue;
 
-                    var label = s.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() ?? "" : "";
-                    if (string.IsNullOrEmpty(label)) label = key[..Math.Min(key.Length, 20)];
-                    Sessions.Add(new SessionInfo { Key = key, Label = label });
-                    existing.Add(key);
+                        var label = s.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() ?? "" : "";
+                        if (string.IsNullOrEmpty(label)) label = key[..Math.Min(key.Length, 20)];
+                        Sessions.Add(new SessionInfo { Key = key, Label = label });
+                        existing.Add(key);
+                    }
                 }
             }
         }
@@ -502,7 +507,8 @@ public class MainViewModel : INotifyPropertyChanged
             var result = await _client.SendRpcAsync("sessions.create", ps);
             if (result != null)
             {
-                var payload = result.Value;
+                using var doc = JsonDocument.Parse(result);
+                var payload = doc.RootElement;
                 if (payload.TryGetProperty("key", out var key) && key.GetString() is string k && k.Length > 0)
                 {
                     var sessionLabel = payload.TryGetProperty("label", out var l) && l.GetString() is string lb && lb.Length > 0 ? lb : (label ?? $"会话 {Sessions.Count}");
@@ -512,7 +518,7 @@ public class MainViewModel : INotifyPropertyChanged
                     AddSystemMessage($"已创建新会话: {sessionLabel}");
                     return;
                 }
-                Logger.Error($"sessions.create unexpected payload: {payload.GetRawText()}");
+                Logger.Error($"sessions.create unexpected payload: {result}");
                 AddSystemMessage($"创建会话失败: 返回格式异常");
             }
             else
@@ -550,7 +556,8 @@ public class MainViewModel : INotifyPropertyChanged
                 return;
             }
 
-            var payload = result.Value;
+            using var histDoc = JsonDocument.Parse(result);
+            var payload = histDoc.RootElement;
             // 兼容返回格式：{ messages: [...] } 或直接数组
             JsonElement msgsEl = default;
             bool found = false;
@@ -566,7 +573,7 @@ public class MainViewModel : INotifyPropertyChanged
 
             if (!found)
             {
-                Logger.Info($"chat.history unexpected payload: {payload.GetRawText()}");
+                Logger.Info($"chat.history unexpected payload: {result}");
                 return;
             }
 
@@ -852,7 +859,8 @@ public class MainViewModel : INotifyPropertyChanged
             var result = await _client.SendRpcAsync("chat.history", ps);
             if (result == null) return;
 
-            var payload = result.Value;
+            using var histDoc = JsonDocument.Parse(result);
+            var payload = histDoc.RootElement;
             JsonElement msgsEl = default;
             bool found = false;
             if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("messages", out msgsEl))

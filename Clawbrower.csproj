@@ -16,4 +16,8 @@
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="mcp\**" CopyToOutputDirectory="PreserveNewest" Link="mcp\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

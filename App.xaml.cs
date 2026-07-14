@@ -13,6 +13,7 @@ public partial class App : System.Windows.Application
     private WF.NotifyIcon? _trayIcon;
     private MainWindow? _mainWindow;
     private static Bitmap? _trayBitmap;
+    public static McpService McpService { get; } = new();
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -64,6 +65,44 @@ public partial class App : System.Windows.Application
         menu.Items.Add("设置", null, (_, _) => OpenSettings());
         menu.Items.Add("连接设置...", null, (_, _) => OpenConnectionSettings());
         menu.Items.Add("重连", null, (_, _) => _ = _mainWindow!.Reconnect());
+        menu.Items.Add(new WF.ToolStripSeparator());
+
+        // MCP 远程控制菜单
+        var mcpStartItem = new WF.ToolStripMenuItem("启动 MCP 远程控制", null, (_, _) => StartMcp());
+        var mcpStopItem = new WF.ToolStripMenuItem("停止 MCP 远程控制", null, (_, _) => StopMcp());
+        var mcpSettingsItem = new WF.ToolStripMenuItem("MCP 设置...", null, (_, _) => OpenMcpSettings());
+        mcpStopItem.Enabled = false;
+        menu.Items.Add(mcpStartItem);
+        menu.Items.Add(mcpStopItem);
+        menu.Items.Add(mcpSettingsItem);
+
+        // MCP 状态变更时更新菜单
+        McpService.OnStatusChanged += (status) =>
+        {
+            _mainWindow?.Dispatcher.Invoke(() =>
+            {
+                mcpStartItem.Enabled = status != McpStatus.Running && status != McpStatus.Starting;
+                mcpStopItem.Enabled = status == McpStatus.Running;
+                mcpStartItem.Text = status switch
+                {
+                    McpStatus.Running => "MCP 运行中",
+                    McpStatus.Starting => "MCP 启动中...",
+                    McpStatus.Error => "MCP 异常",
+                    _ => "MCP 远程控制"
+                };
+            });
+        };
+
+        // MCP 详细操作消息 → 显示在聊天窗口
+        McpService.OnMessage += (msg) =>
+        {
+            _mainWindow?.Dispatcher.Invoke(() =>
+            {
+                if (_mainWindow.DataContext is ViewModels.MainViewModel vm)
+                    vm.AddSystemMessage(msg);
+            });
+        };
+
         menu.Items.Add(new WF.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ShutdownApp());
         _trayIcon.ContextMenuStrip = menu;
@@ -131,9 +170,57 @@ public partial class App : System.Windows.Application
         });
     }
 
+    private void StartMcp()
+    {
+        _mainWindow?.Dispatcher.Invoke(() =>
+        {
+            var existing = ConfigService.GetMcpConfig();
+            if (!existing.IsConfigured)
+            {
+                var result = McpConfigDialog.Show(_mainWindow, existing);
+                if (result == null) return; // cancelled
+                ConfigService.SetMcpConfig(result);
+                existing = result;
+            }
+            _ = McpService.StartAsync(existing);
+        });
+    }
+
+    private void StopMcp()
+    {
+        McpService.Stop();
+    }
+
+    private void OpenMcpSettings()
+    {
+        _mainWindow?.Dispatcher.Invoke(() =>
+        {
+            var existing = ConfigService.GetMcpConfig();
+            var result = McpConfigDialog.Show(_mainWindow, existing);
+            if (result == null) return; // cancelled
+
+            ConfigService.SetMcpConfig(result);
+
+            // 如果正在运行，提示需要重启
+            if (McpService.Status == McpStatus.Running)
+            {
+                if (_mainWindow.DataContext is ViewModels.MainViewModel vm)
+                    vm.AddSystemMessage("MCP 配置已更新，将自动重启以应用新配置...");
+                McpService.Stop();
+                // 等待停止后重新启动
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(1500);
+                    _mainWindow.Dispatcher.Invoke(() => _ = McpService.StartAsync(result));
+                });
+            }
+        });
+    }
+
     private void ShutdownApp()
     {
         Logger.Info("App shutting down");
+        McpService.Stop();
         _trayIcon?.Dispose();
         _mainWindow?.Dispatcher.Invoke(() => _mainWindow?.Close());
         Shutdown();
@@ -141,6 +228,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        McpService.Stop();
         _trayIcon?.Dispose();
         _trayBitmap?.Dispose();
         Logger.Info("App exited");

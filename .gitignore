@@ -3,15 +3,26 @@ bin/
 obj/
 publish/
 
+# MCP 二进制资源（frpc.exe + windows-mcp.exe，62MB+）
+mcp/
+
 # IDE 配置
 .idea/
 .vs/
 *.suo
 *.user
 
-# Claude Code 内部文件
+# Claude Code / Omo 内部文件
 .claude/
+.omo/
 
 # 系统文件
 Thumbs.db
 Desktop.ini
+
+# JVM 崩溃日志
+hs_err_pid*.log
+replay_pid*.log
+
+# Codegraph 索引
+.codegraph/

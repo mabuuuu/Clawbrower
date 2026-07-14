@@ -152,6 +152,9 @@ public static class ConfigService
 
     public static string? GetPassword() => Load().GatewayPassword;
     public static string? GetDeviceToken() => Load().DeviceToken;
+
+    public static McpConfig GetMcpConfig() => Load().Mcp ?? new McpConfig();
+    public static void SetMcpConfig(McpConfig cfg) { var s = Load(); s.Mcp = cfg; Save(); }
 }
 
 public class Settings
@@ -174,4 +177,16 @@ public class Settings
     public double WindowTop { get; set; } = double.NaN;
     public double WindowWidth { get; set; } = 420;
     public double WindowHeight { get; set; } = 580;
+    public McpConfig? Mcp { get; set; }
+}
+
+public class McpConfig
+{
+    public string DeviceName { get; set; } = "";
+    public int LocalPort { get; set; } = 9527;
+    public int RemotePort { get; set; } = 9527;
+    public string FrpServerAddr { get; set; } = "124.222.90.15";
+    public int FrpServerPort { get; set; } = 7000;
+    public string FrpAuthToken { get; set; } = "cl@w2026";
+    public bool IsConfigured { get; set; } = false;
 }

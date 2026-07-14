@@ -16,7 +16,7 @@ public class GatewayClient : IDisposable
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
     private int _reqCounter;
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement?>> _pending = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _pending = new();
     private string? _activeStreamType;
     private bool _streamEnded;
 
@@ -165,7 +165,7 @@ public class GatewayClient : IDisposable
         };
 
         var frame = new Dictionary<string, object> { ["type"] = "req", ["id"] = id, ["method"] = "connect", ["params"] = connectParams };
-        var tcs = new TaskCompletionSource<JsonElement?>();
+        var tcs = new TaskCompletionSource<string?>();
         _pending[id] = tcs;
         await SendJsonAsync(frame);
     }
@@ -175,12 +175,12 @@ public class GatewayClient : IDisposable
         await SendRpcAsync("chat.abort", new Dictionary<string, object> { ["sessionKey"] = sessionKey });
     }
 
-    public async Task<JsonElement?> SendRpcAsync(string method, Dictionary<string, object>? ps = null)
+    public async Task<string?> SendRpcAsync(string method, Dictionary<string, object>? ps = null)
     {
         var id = NextId();
         var frame = new Dictionary<string, object> { ["type"] = "req", ["id"] = id, ["method"] = method };
         if (ps != null) frame["params"] = ps;
-        var tcs = new TaskCompletionSource<JsonElement?>();
+        var tcs = new TaskCompletionSource<string?>();
         _pending[id] = tcs;
         await SendJsonAsync(frame);
         return await tcs.Task;
@@ -200,7 +200,7 @@ public class GatewayClient : IDisposable
                 ["message"] = content
             }
         };
-        var tcs = new TaskCompletionSource<JsonElement?>();
+        var tcs = new TaskCompletionSource<string?>();
         _pending[id] = tcs;
         await SendJsonAsync(frame);
         await tcs.Task;
@@ -336,7 +336,13 @@ public class GatewayClient : IDisposable
             if (_pending.TryRemove(id, out var tcs))
             {
                 if (root.TryGetProperty("ok", out var okEl) && okEl.ValueKind == JsonValueKind.True)
-                    tcs.TrySetResult(root.TryGetProperty("payload", out var pl) ? pl : null);
+                {
+                    // 返回 payload 的 JSON 文本，避免 JsonElement 引用已 Dispose 的 JsonDocument
+                    string? payloadJson = null;
+                    if (root.TryGetProperty("payload", out var pl))
+                        payloadJson = pl.GetRawText();
+                    tcs.TrySetResult(payloadJson);
+                }
                 else
                 {
                     var errMsg = "RPC error";

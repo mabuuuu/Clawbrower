@@ -83,6 +83,24 @@ public partial class MainWindow : Window
         SetTextOpacity(s.TextOpacity);
         SetTextColor(s.TextColor);
         Logger.Info($"Settings: winOpacity={s.Opacity}, textOpacity={s.TextOpacity}, textColor={s.TextColor}, hotkey={_hotkeyMod}+{_hotkeyKey}");
+
+        // MCP 状态按钮更新
+        App.McpService.OnStatusChanged += (status) =>
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                McpButton.ToolTip = status switch
+                {
+                    McpStatus.Running => "MCP 运行中（点击停止）",
+                    McpStatus.Starting => "MCP 启动中...",
+                    McpStatus.Error => $"MCP 异常: {App.McpService.LastError}",
+                    _ => "MCP 远程控制（点击启动）"
+                };
+                McpDot.Fill = status == McpStatus.Running
+                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x4C, 0xAF, 0x50))
+                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
+            });
+        };
     }
 
     // ── Global hotkey ──
@@ -255,6 +273,26 @@ public partial class MainWindow : Window
         {
             _suppressScrollToEnd = false;
         }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+    }
+
+    private void McpButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.McpService.Status == McpStatus.Running)
+        {
+            App.McpService.Stop();
+        }
+        else if (App.McpService.Status == McpStatus.Stopped || App.McpService.Status == McpStatus.Error)
+        {
+            var existing = ConfigService.GetMcpConfig();
+            if (!existing.IsConfigured)
+            {
+                var result = Dialogs.McpConfigDialog.Show(this, existing);
+                if (result == null) return;
+                ConfigService.SetMcpConfig(result);
+                existing = result;
+            }
+            _ = App.McpService.StartAsync(existing);
+        }
     }
 
     // ── Settings callbacks ──
