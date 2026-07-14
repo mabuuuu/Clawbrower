@@ -3,8 +3,9 @@ bin/
 obj/
 publish/
 
-# MCP 二进制资源（frpc.exe + windows-mcp.exe，62MB+）
-mcp/
+# MCP 二进制资源 — frpc.exe + windows-mcp.exe
+# 注意：mcp/ 目录需要提交到 git 以确保 clone 后可直接使用
+# mcp/
 
 # IDE 配置
 .idea/
