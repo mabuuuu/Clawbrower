@@ -124,6 +124,7 @@ public partial class App : System.Windows.Application
         {
             if (_mainWindow.WindowState == WindowState.Maximized)
                 _mainWindow.WindowState = WindowState.Normal;
+            _mainWindow.RequestFocusInput();
             _mainWindow?.Show();
             _mainWindow?.Activate();
             Logger.Info("Window shown from tray");

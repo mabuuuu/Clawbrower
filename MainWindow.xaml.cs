@@ -21,6 +21,11 @@ public partial class MainWindow : Window
     private const int WM_HOTKEY = 0x0312;
     private const int HOTKEY_ID = 9001;
 
+    /// <summary>
+    /// 标记是否应聚焦输入框（仅热键/托盘唤起时为 true，用户点击内容区域时不抢焦点）
+    /// </summary>
+    private bool _shouldFocusInput;
+
     private ModifierKeys _hotkeyMod;
     private Key _hotkeyKey;
     private System.Windows.Threading.DispatcherTimer _resizeTimer;
@@ -73,7 +78,7 @@ public partial class MainWindow : Window
             _resizeTimer.Start();
         };
 
-        Activated += (_, _) => InputBox.Focus();
+        Activated += OnWindowActivated;
         KeyDown += Window_KeyDown;
 
         var s = ConfigService.Load();
@@ -129,6 +134,21 @@ public partial class MainWindow : Window
 
     private void UnregisterHotkey() { if (_hwndSource != null) UnregisterHotKey(_hwndSource.Handle, HOTKEY_ID); }
 
+    private void OnWindowActivated(object sender, EventArgs e)
+    {
+        // 仅在热键/托盘唤起时聚焦输入框，用户点击消息区域选择文字时不抢焦点
+        if (_shouldFocusInput)
+        {
+            InputBox.Focus();
+            _shouldFocusInput = false;
+        }
+    }
+
+    public void RequestFocusInput()
+    {
+        _shouldFocusInput = true;
+    }
+
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         var hwnd = new WindowInteropHelper(this).Handle;
@@ -139,16 +159,17 @@ public partial class MainWindow : Window
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
-        {
-            if (IsActive && InputBox.IsFocused)
-                Hide();
-            else
+            if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
             {
-                if (WindowState == WindowState.Maximized)
-                    WindowState = WindowState.Normal;
-                Show(); Activate(); InputBox.Focus();
-            }
+                if (IsActive && InputBox.IsFocused)
+                    Hide();
+                else
+                {
+                    if (WindowState == WindowState.Maximized)
+                        WindowState = WindowState.Normal;
+                    _shouldFocusInput = true;
+                    Show(); Activate(); InputBox.Focus();
+                }
             handled = true;
             return IntPtr.Zero;
         }
