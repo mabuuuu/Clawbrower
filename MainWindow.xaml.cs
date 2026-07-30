@@ -106,6 +106,26 @@ public partial class MainWindow : Window
                     : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
             });
         };
+
+        // 语音输入状态按钮更新
+        App.SpeechService.OnEnabledChanged += (enabled) =>
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                SpeechButton.ToolTip = enabled ? "语音输入已开启（点击关闭）" : "语音输入（点击开启）";
+                SpeechDot.Fill = enabled
+                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x4C, 0xAF, 0x50))
+                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
+            });
+        };
+        // 初始化语音按钮状态
+        {
+            var enabled = App.SpeechService.IsEnabled;
+            SpeechButton.ToolTip = enabled ? "语音输入已开启（点击关闭）" : "语音输入（点击开启）";
+            SpeechDot.Fill = enabled
+                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x4C, 0xAF, 0x50))
+                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
+        }
     }
 
     // ── Global hotkey ──
@@ -314,6 +334,12 @@ public partial class MainWindow : Window
             }
             _ = App.McpService.StartAsync(existing);
         }
+    }
+
+    private void SpeechButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.Current is App app)
+            app.ToggleSpeech();
     }
 
     // ── Settings callbacks ──

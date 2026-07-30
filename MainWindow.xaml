@@ -186,6 +186,28 @@
                                 <Ellipse x:Name="McpDot" Width="6" Height="6" Margin="2,0,4,0"
                                          Fill="#666666" VerticalAlignment="Center"/>
                             </StackPanel>
+                            <!-- 语音输入开关 -->
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="SpeechButton" Content="语音" Width="44" Height="22"
+                                        ToolTip="语音输入（点击开启）" FontSize="10" Cursor="Hand"
+                                        Click="SpeechButton_Click" Foreground="{DynamicResource TextBrush}"
+                                        Background="Transparent" BorderThickness="0">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="SpeechBorder" Background="#33666666" CornerRadius="4" Padding="4,0">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="SpeechBorder" Property="Background" Value="#44888888"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                                <Ellipse x:Name="SpeechDot" Width="6" Height="6" Margin="2,0,4,0"
+                                         Fill="#666666" VerticalAlignment="Center"/>
+                            </StackPanel>
                             <Button Content="+" Width="24" Height="22" ToolTip="新建会话"
                                     Style="{StaticResource TitleButtonStyle}"
                                     Click="NewSession_Click"/>
