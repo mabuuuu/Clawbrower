@@ -216,11 +216,12 @@ public class SpeechClient : IDisposable
                     OnTranscript?.Invoke(text);
                     break;
 
-                case "reply":
-                    var reply = root.TryGetProperty("text", out var r) ? r.GetString() ?? "" : "";
-                    Logger.Info($"SpeechClient reply: {reply[..Math.Min(reply.Length, 60)]}");
-                    OnReply?.Invoke(reply);
-                    break;
+            case "reply":
+                var replyRaw = root.TryGetProperty("text", out var r) ? r.GetString() ?? "" : "";
+                var replyText = TryParseReplyPayload(replyRaw);
+                Logger.Info($"SpeechClient reply: {replyText[..Math.Min(replyText.Length, 60)]}");
+                OnReply?.Invoke(replyText);
+                break;
 
                 case "audio_end":
                     Logger.Info("SpeechClient audio_end received");
@@ -242,6 +243,27 @@ public class SpeechClient : IDisposable
         {
             Logger.Error($"SpeechClient process message failed: {ex.Message}, raw={json[..Math.Min(json.Length, 200)]}");
         }
+    }
+
+    /// <summary>尝试从嵌套 JSON（含 runId/status/result/payloads）中提取 result.payloads[0].text；格式不匹配则原样返回</summary>
+    private static string TryParseReplyPayload(string text)
+    {
+        if (!text.StartsWith("{") || !text.Contains("\"payloads\"")) return text;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("result", out var result) &&
+                result.TryGetProperty("payloads", out var payloads) &&
+                payloads.GetArrayLength() > 0)
+            {
+                var firstPayload = payloads[0];
+                if (firstPayload.TryGetProperty("text", out var textEl))
+                    return textEl.GetString() ?? text;
+            }
+        }
+        catch { /* 解析失败，回退到原始文本 */ }
+        return text;
     }
 
     public void Dispose()
