@@ -257,6 +257,8 @@ public class SpeechService : IDisposable
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
+                if (stage == "thinking")
+                    OnStatusMessage?.Invoke("正在思考...");
                 Logger.Info($"SpeechService status: {stage}");
             });
         };
