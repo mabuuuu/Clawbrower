@@ -160,20 +160,12 @@ public static class ConfigService
     public static void SetSpeechConfig(SpeechConfig cfg) { var s = Load(); s.Speech = cfg; Save(); }
 
     /// <summary>
-    /// 从 GatewayUrl 提取主机名，拼接语音 WebSocket 地址 ws://host:9529/speech
+    /// 返回用户配置的语音服务器地址。未配置时返回 null（不再从 GatewayUrl 自动推导）。
     /// </summary>
-    public static string GetSpeechServerUrl()
+    public static string? GetSpeechServerUrl()
     {
-        var gwUrl = GetGatewayUrl();
-        try
-        {
-            var uri = new Uri(gwUrl);
-            return $"ws://{uri.Host}:9529/speech";
-        }
-        catch
-        {
-            return "ws://127.0.0.1:9529/speech";
-        }
+        var cfg = GetSpeechConfig();
+        return string.IsNullOrWhiteSpace(cfg.ServerUrl) ? null : cfg.ServerUrl.Trim();
     }
 }
 
@@ -228,6 +220,9 @@ public class SpeechConfig
 
     /// <summary>PTT 按键的 Windows 虚拟键码 (VK)。默认 F12 = 0x7B = 123</summary>
     public int PttVirtualKey { get; set; } = 0x7B;
+
+    /// <summary>语音服务器 WebSocket 地址（如 ws://host:9529/speech）。默认为空，首次连接时弹窗填写。</summary>
+    public string? ServerUrl { get; set; }
 
     /// <summary>是否已完成首次配置</summary>
     public bool IsConfigured { get; set; } = false;

@@ -101,7 +101,7 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         ModeCombo.SelectedIndex = (int)speechCfg.Mode;
         _capturedPttKey = KeyInterop.KeyFromVirtualKey(speechCfg.PttVirtualKey);
         UpdatePttKeyDisplay();
-        SpeechServerUrl.Text = ConfigService.GetSpeechServerUrl();
+        SpeechServerUrl.Text = speechCfg.ServerUrl ?? "";
 
         Loaded += (_, _) => { UrlBox.SelectAll(); UrlBox.Focus(); };
     }
@@ -231,9 +231,13 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         // ── 语音 ──
         var speechCfg = ConfigService.GetSpeechConfig();
         var newPttVk = KeyInterop.VirtualKeyFromKey(_capturedPttKey);
-        var speechChanged = speechCfg.PttVirtualKey != newPttVk || speechCfg.Mode != (SpeechMode)ModeCombo.SelectedIndex;
+        var newServerUrl = string.IsNullOrWhiteSpace(SpeechServerUrl.Text) ? null : SpeechServerUrl.Text.Trim();
+        var speechChanged = speechCfg.PttVirtualKey != newPttVk
+                            || speechCfg.Mode != (SpeechMode)ModeCombo.SelectedIndex
+                            || speechCfg.ServerUrl != newServerUrl;
         speechCfg.Mode = (SpeechMode)ModeCombo.SelectedIndex;
         speechCfg.PttVirtualKey = newPttVk;
+        speechCfg.ServerUrl = newServerUrl;
         speechCfg.IsConfigured = true;
         c.Speech = speechCfg;
 

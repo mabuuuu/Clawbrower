@@ -256,26 +256,38 @@ public partial class App : System.Windows.Application
         });
     }
 
-    private void ToggleSpeech()
+    public void ToggleSpeech()
     {
         _mainWindow?.Dispatcher.Invoke(() =>
         {
             if (SpeechService.IsEnabled)
             {
                 SpeechService.Disable();
+                return;
             }
-            else
+
+            var cfg = ConfigService.GetSpeechConfig();
+
+            // 语音服务器地址为空 -> 首次连接弹窗填写
+            if (string.IsNullOrWhiteSpace(cfg.ServerUrl))
             {
-                var cfg = ConfigService.GetSpeechConfig();
-                if (!cfg.IsConfigured)
-                {
-                    cfg.PttVirtualKey = 0x7B; // F12
-                    cfg.Mode = SpeechMode.PTT;
-                    cfg.IsConfigured = true;
-                    ConfigService.SetSpeechConfig(cfg);
-                }
-                SpeechService.Enable(cfg.PttVirtualKey);
+                var input = InputDialog.Show(_mainWindow!,
+                    "语音服务器地址",
+                    "首次使用语音，请输入语音服务器地址（ws://主机:端口/speech）：",
+                    "ws://127.0.0.1:9529/speech");
+                if (input == null) return; // 用户取消，不开启语音
+                cfg.ServerUrl = input;
             }
+
+            // PTT 按键首次默认
+            if (!cfg.IsConfigured)
+            {
+                cfg.PttVirtualKey = 0x7B; // F12
+                cfg.Mode = SpeechMode.PTT;
+                cfg.IsConfigured = true;
+            }
+            ConfigService.SetSpeechConfig(cfg);
+            SpeechService.Enable(cfg.PttVirtualKey);
         });
     }
 
