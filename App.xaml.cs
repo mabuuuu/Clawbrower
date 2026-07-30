@@ -14,6 +14,7 @@ public partial class App : System.Windows.Application
     private MainWindow? _mainWindow;
     private static Bitmap? _trayBitmap;
     public static McpService McpService { get; } = new();
+    public static SpeechService SpeechService { get; } = new();
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -62,8 +63,7 @@ public partial class App : System.Windows.Application
 
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("显示/隐藏", null, (_, _) => ToggleWindow());
-        menu.Items.Add("设置", null, (_, _) => OpenSettings());
-        menu.Items.Add("连接设置...", null, (_, _) => OpenConnectionSettings());
+        menu.Items.Add("设置...", null, (_, _) => OpenSettings());
         menu.Items.Add("重连", null, (_, _) => _ = _mainWindow!.Reconnect());
         menu.Items.Add(new WF.ToolStripSeparator());
 
@@ -103,6 +103,44 @@ public partial class App : System.Windows.Application
             });
         };
 
+
+        // 语音输入菜单
+        var speechToggleItem = new WF.ToolStripMenuItem("开启语音输入", null, (_, _) => ToggleSpeech());
+        menu.Items.Add(speechToggleItem);
+
+        // SpeechService 事件 -> MainViewModel 桥接
+        SpeechService.OnStatusMessage += (msg) =>
+        {
+            _mainWindow?.Dispatcher.Invoke(() =>
+            {
+                if (_mainWindow.DataContext is ViewModels.MainViewModel vm)
+                    vm.AddSystemMessage(msg);
+            });
+        };
+        SpeechService.OnTranscript += (text) =>
+        {
+            _mainWindow?.Dispatcher.Invoke(() =>
+            {
+                if (_mainWindow.DataContext is ViewModels.MainViewModel vm)
+                    vm.AddSpeechTranscript(text);
+            });
+        };
+        SpeechService.OnReply += (text) =>
+        {
+            _mainWindow?.Dispatcher.Invoke(() =>
+            {
+                if (_mainWindow.DataContext is ViewModels.MainViewModel vm)
+                    vm.AddSpeechReply(text);
+            });
+        };
+        SpeechService.OnEnabledChanged += (enabled) =>
+        {
+            _mainWindow?.Dispatcher.Invoke(() =>
+            {
+                speechToggleItem.Text = enabled ? "关闭语音输入" : "开启语音输入";
+                speechToggleItem.Checked = enabled;
+            });
+        };
         menu.Items.Add(new WF.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ShutdownApp());
         _trayIcon.ContextMenuStrip = menu;
@@ -218,9 +256,33 @@ public partial class App : System.Windows.Application
         });
     }
 
+    private void ToggleSpeech()
+    {
+        _mainWindow?.Dispatcher.Invoke(() =>
+        {
+            if (SpeechService.IsEnabled)
+            {
+                SpeechService.Disable();
+            }
+            else
+            {
+                var cfg = ConfigService.GetSpeechConfig();
+                if (!cfg.IsConfigured)
+                {
+                    cfg.PttVirtualKey = 0x7B; // F12
+                    cfg.Mode = SpeechMode.PTT;
+                    cfg.IsConfigured = true;
+                    ConfigService.SetSpeechConfig(cfg);
+                }
+                SpeechService.Enable(cfg.PttVirtualKey);
+            }
+        });
+    }
+
     private void ShutdownApp()
     {
         Logger.Info("App shutting down");
+        SpeechService.Dispose();
         McpService.Stop();
         _trayIcon?.Dispose();
         _mainWindow?.Dispatcher.Invoke(() => _mainWindow?.Close());
@@ -229,6 +291,7 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        SpeechService.Dispose();
         McpService.Stop();
         _trayIcon?.Dispose();
         _trayBitmap?.Dispose();

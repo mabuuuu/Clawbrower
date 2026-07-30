@@ -4,8 +4,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Clawbrower.Services;
+using SpeechMode = Clawbrower.Services.SpeechMode;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using Media = System.Windows.Media;
+using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
 
 namespace Clawbrower;
 
@@ -13,6 +15,14 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
 {
     private readonly MainWindow _mainWindow;
     private bool _capturingHotkey;
+    private bool _capturingPttKey;
+
+    // ── 外观（实时预览，取消时恢复）──
+    private readonly double _origWindowOpacity;
+    private readonly double _origTextOpacity;
+    private readonly string _origTextColor;
+    private readonly ModifierKeys _origHotkeyMod;
+    private readonly Key _origHotkeyKey;
 
     private string _textColor;
     public string TextColor
@@ -44,7 +54,7 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         set { _textOpacity = value; OnPropertyChanged(); _mainWindow.SetTextOpacity(value); }
     }
 
-    private string _hotkeyDisplay = "Alt + C";
+    private string _hotkeyDisplay = "Alt + Z";
     public string HotkeyDisplay
     {
         get => _hotkeyDisplay;
@@ -54,10 +64,21 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
     private ModifierKeys _hotkeyMod = ModifierKeys.Alt;
     private Key _hotkeyKey = Key.Z;
 
+    // ── 语音 PTT 按键 ──
+    private Key _capturedPttKey = Key.F12;
+
     public SettingsWindow(MainWindow mainWindow)
     {
         _mainWindow = mainWindow;
         var s = ConfigService.Load();
+
+        // 外观
+        _origWindowOpacity = s.Opacity;
+        _origTextOpacity = s.TextOpacity;
+        _origTextColor = s.TextColor;
+        _origHotkeyMod = s.HotkeyMod;
+        _origHotkeyKey = s.HotkeyKey;
+
         _windowOpacity = s.Opacity;
         _textOpacity = s.TextOpacity;
         _textColor = s.TextColor;
@@ -68,18 +89,31 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         InitializeComponent();
         DataContext = this;
 
-        Closed += (_, _) =>
-        {
-            var c = ConfigService.Load();
-            c.Opacity = _windowOpacity;
-            c.TextOpacity = _textOpacity;
-            c.TextColor = _textColor;
-            c.HotkeyMod = _hotkeyMod;
-            c.HotkeyKey = _hotkeyKey;
-            ConfigService.Save();
-        };
+        // 连接
+        UrlBox.Text = s.GatewayUrl ?? "ws://127.0.0.1:18789";
+        AuthTypeCombo.SelectedIndex = s.UsePasswordAuth ? 1 : 0;
+        TokenBox.Text = s.GatewayToken ?? "";
+        PasswordBox.Password = s.GatewayPassword ?? "";
+        UpdateAuthVisibility();
+
+        // 语音
+        var speechCfg = ConfigService.GetSpeechConfig();
+        ModeCombo.SelectedIndex = (int)speechCfg.Mode;
+        _capturedPttKey = KeyInterop.KeyFromVirtualKey(speechCfg.PttVirtualKey);
+        UpdatePttKeyDisplay();
+        SpeechServerUrl.Text = ConfigService.GetSpeechServerUrl();
+
+        Loaded += (_, _) => { UrlBox.SelectAll(); UrlBox.Focus(); };
     }
 
+    // ════════ 外观：颜色选择 ════════
+    private void ColorButton_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Border border && border.Tag is string color)
+            TextColor = color;
+    }
+
+    // ════════ 外观：全局快捷键捕获 ════════
     private void HotkeyBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         _capturingHotkey = true;
@@ -92,7 +126,6 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         if (!_capturingHotkey) return;
 
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-
         if (key == Key.LeftCtrl || key == Key.RightCtrl ||
             key == Key.LeftAlt || key == Key.RightAlt ||
             key == Key.LeftShift || key == Key.RightShift ||
@@ -107,14 +140,140 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         _hotkeyMod = mod;
         _hotkeyKey = key;
         _capturingHotkey = false;
-
         HotkeyDisplay = HotkeyToString(mod, key);
         _mainWindow.RegisterHotkey(mod, key);
-
         Keyboard.ClearFocus();
         e.Handled = true;
     }
 
+    // ════════ 连接：认证方式切换 ════════
+    private void AuthTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        UpdateAuthVisibility();
+    }
+
+    private void UpdateAuthVisibility()
+    {
+        var isPassword = AuthTypeCombo.SelectedIndex == 1;
+        TokenLabel.Visibility = isPassword ? Visibility.Collapsed : Visibility.Visible;
+        TokenBox.Visibility = isPassword ? Visibility.Collapsed : Visibility.Visible;
+        PasswordLabel.Visibility = isPassword ? Visibility.Visible : Visibility.Collapsed;
+        PasswordBox.Visibility = isPassword ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ════════ 语音：PTT 按键捕获 ════════
+    private void PttKeyBox_GotFocus(object sender, RoutedEventArgs e)
+    {
+        _capturingPttKey = true;
+        PttKeyBox.Text = "按下任意键...";
+    }
+
+    private void PttKeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_capturingPttKey) return;
+        e.Handled = true;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.None) return;
+        if (key == Key.LeftShift || key == Key.RightShift ||
+            key == Key.LeftCtrl || key == Key.RightCtrl ||
+            key == Key.LeftAlt || key == Key.RightAlt ||
+            key == Key.LWin || key == Key.RWin)
+            return;
+
+        _capturedPttKey = key;
+        UpdatePttKeyDisplay();
+        ModeCombo.Focus();
+    }
+
+    private void UpdatePttKeyDisplay()
+    {
+        var keyName = _capturedPttKey switch
+        {
+            Key.F12 => "F12", Key.F11 => "F11", Key.F10 => "F10", Key.F9 => "F9",
+            Key.F8 => "F8", Key.F7 => "F7", Key.F6 => "F6", Key.F5 => "F5",
+            Key.F4 => "F4", Key.F3 => "F3", Key.F2 => "F2", Key.F1 => "F1",
+            Key.Space => "空格键", _ => _capturedPttKey.ToString()
+        };
+        PttKeyBox.Text = keyName;
+        PttHint.Text = $"当前按键: {keyName}（VK=0x{KeyInterop.VirtualKeyFromKey(_capturedPttKey):X2}）";
+    }
+
+    // ════════ 确认：保存所有设置 ════════
+    private void ConfirmButton_Click(object sender, RoutedEventArgs e)
+    {
+        // ── 外观 ──
+        var c = ConfigService.Load();
+        c.Opacity = _windowOpacity;
+        c.TextOpacity = _textOpacity;
+        c.TextColor = _textColor;
+        c.HotkeyMod = _hotkeyMod;
+        c.HotkeyKey = _hotkeyKey;
+
+        // ── 连接 ──
+        var newUrl = string.IsNullOrWhiteSpace(UrlBox.Text) ? "ws://127.0.0.1:18789" : UrlBox.Text.Trim();
+        var usePassword = AuthTypeCombo.SelectedIndex == 1;
+        var newToken = usePassword ? null : TokenBox.Text?.Trim();
+        var newPassword = usePassword ? PasswordBox.Password : null;
+
+        var connectionChanged = c.GatewayUrl != newUrl ||
+                                c.UsePasswordAuth != usePassword ||
+                                c.GatewayToken != newToken ||
+                                c.GatewayPassword != newPassword;
+
+        c.GatewayUrl = newUrl;
+        c.UsePasswordAuth = usePassword;
+        c.GatewayToken = newToken;
+        c.GatewayPassword = newPassword;
+        c.IsConfigured = true;
+
+        // ── 语音 ──
+        var speechCfg = ConfigService.GetSpeechConfig();
+        var newPttVk = KeyInterop.VirtualKeyFromKey(_capturedPttKey);
+        var speechChanged = speechCfg.PttVirtualKey != newPttVk || speechCfg.Mode != (SpeechMode)ModeCombo.SelectedIndex;
+        speechCfg.Mode = (SpeechMode)ModeCombo.SelectedIndex;
+        speechCfg.PttVirtualKey = newPttVk;
+        speechCfg.IsConfigured = true;
+        c.Speech = speechCfg;
+
+        ConfigService.Save();
+
+        // 连接变更 -> 重连
+        if (connectionChanged)
+            _ = _mainWindow.Reconnect();
+
+        // 语音变更 -> 更新 PTT 按键
+        if (speechChanged && App.SpeechService.IsEnabled)
+            App.SpeechService.UpdatePttKey(newPttVk);
+
+        DialogResult = true;
+        Close();
+    }
+
+    // ════════ 取消：恢复外观原始值 ════════
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        _mainWindow.SetWindowOpacity(_origWindowOpacity);
+        _mainWindow.SetTextOpacity(_origTextOpacity);
+        _mainWindow.SetTextColor(_origTextColor);
+        _mainWindow.RegisterHotkey(_origHotkeyMod, _origHotkeyKey);
+        DialogResult = false;
+        Close();
+    }
+
+    // ════════ 窗口交互 ════════
+    private void Window_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape) CancelButton_Click(sender, e);
+    }
+
+    private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource == this) DragMove();
+    }
+
+    // ════════ Helpers ════════
     private static string HotkeyToString(ModifierKeys mod, Key key)
     {
         var parts = new System.Collections.Generic.List<string>();
@@ -124,12 +283,6 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         if (mod.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
         parts.Add(key.ToString());
         return string.Join(" + ", parts);
-    }
-
-    private void ColorButton_Click(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is Border border && border.Tag is string color)
-            TextColor = color;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

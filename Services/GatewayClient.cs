@@ -17,6 +17,9 @@ public class GatewayClient : IDisposable
     private CancellationTokenSource? _cts;
     private int _reqCounter;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _pending = new();
+    private readonly object _pendingGate = new();
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private bool _acceptingRequests;
     private string? _activeStreamType;
     private bool _streamEnded;
 
@@ -58,6 +61,7 @@ public class GatewayClient : IDisposable
             using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, connectCts.Token);
             await _ws.ConnectAsync(new Uri(_url), linked.Token);
+            lock (_pendingGate) _acceptingRequests = true;
         }
         catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
         {
@@ -79,7 +83,7 @@ public class GatewayClient : IDisposable
         var waited = 0;
         while (!_handshakeDone && !timeout.IsCompleted)
         {
-            await Task.Delay(1000);
+            await Task.Delay(1000, _cts.Token);
             waited++;
             if (_pairingPending && waited % 5 == 0)
                 Logger.Info($"Waiting for admin approval... ({waited}s)");
@@ -165,9 +169,17 @@ public class GatewayClient : IDisposable
         };
 
         var frame = new Dictionary<string, object> { ["type"] = "req", ["id"] = id, ["method"] = "connect", ["params"] = connectParams };
-        var tcs = new TaskCompletionSource<string?>();
-        _pending[id] = tcs;
-        await SendJsonAsync(frame);
+        try
+        {
+            await SendJsonAsync(frame);
+        }
+        catch (Exception ex)
+        {
+            if (_cts?.IsCancellationRequested == true) return;
+            _handshakeError = ex.Message;
+            _handshakeDone = true;
+            Logger.Error($"Connect RPC send failed: {ex.Message}");
+        }
     }
 
     public async Task SendAbortAsync(string sessionKey)
@@ -180,10 +192,17 @@ public class GatewayClient : IDisposable
         var id = NextId();
         var frame = new Dictionary<string, object> { ["type"] = "req", ["id"] = id, ["method"] = method };
         if (ps != null) frame["params"] = ps;
-        var tcs = new TaskCompletionSource<string?>();
-        _pending[id] = tcs;
-        await SendJsonAsync(frame);
-        return await tcs.Task;
+        var tcs = RegisterPendingRequest(id);
+        try
+        {
+            await SendJsonAsync(frame);
+            return await tcs.Task;
+        }
+        catch
+        {
+            _pending.TryRemove(id, out _);
+            throw;
+        }
     }
 
     public async Task<string> SendChatAsync(string sessionKey, string content)
@@ -200,14 +219,35 @@ public class GatewayClient : IDisposable
                 ["message"] = content
             }
         };
-        var tcs = new TaskCompletionSource<string?>();
-        _pending[id] = tcs;
-        await SendJsonAsync(frame);
-        await tcs.Task;
+        var tcs = RegisterPendingRequest(id);
+        try
+        {
+            await SendJsonAsync(frame);
+            await tcs.Task;
+        }
+        catch
+        {
+            _pending.TryRemove(id, out _);
+            throw;
+        }
         return id;
     }
 
-    private string NextId() => (++_reqCounter).ToString();
+    private TaskCompletionSource<string?> RegisterPendingRequest(string id)
+    {
+        lock (_pendingGate)
+        {
+            if (!_acceptingRequests || _ws?.State != WebSocketState.Open)
+                throw new InvalidOperationException("WebSocket 未连接，无法发送请求");
+
+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_pending.TryAdd(id, tcs))
+                throw new InvalidOperationException($"重复的请求 ID: {id}");
+            return tcs;
+        }
+    }
+
+    private string NextId() => Interlocked.Increment(ref _reqCounter).ToString();
 
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -216,10 +256,25 @@ public class GatewayClient : IDisposable
 
     private async Task SendJsonAsync(object obj)
     {
-        if (_ws?.State != WebSocketState.Open) return;
+        var ws = _ws;
+        var cts = _cts;
+        if (ws?.State != WebSocketState.Open || cts == null)
+            throw new InvalidOperationException("WebSocket 未连接，无法发送消息");
+
         var json = JsonSerializer.Serialize(obj, _jsonOptions);
-        Logger.Info($"TX: {json[..Math.Min(json.Length, 500)]}");
-        await _ws.SendAsync(new ArraySegment<byte>(Utf8NoBom.GetBytes(json)), WebSocketMessageType.Text, true, _cts!.Token);
+        await _sendGate.WaitAsync(cts.Token);
+        try
+        {
+            if (!ReferenceEquals(ws, _ws) || ws.State != WebSocketState.Open)
+                throw new InvalidOperationException("WebSocket 连接已变更，无法发送消息");
+
+            Logger.Info($"TX: {json[..Math.Min(json.Length, 500)]}");
+            await ws.SendAsync(new ArraySegment<byte>(Utf8NoBom.GetBytes(json)), WebSocketMessageType.Text, true, cts.Token);
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
     }
 
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct)
@@ -240,9 +295,49 @@ public class GatewayClient : IDisposable
                     try { ProcessFrame(json); } catch (Exception ex) { Logger.Error($"ProcessFrame: {ex.Message}"); }
                 }
             }
+
+            if (!ct.IsCancellationRequested)
+                HandleReceiveFailure(new WebSocketException($"WebSocket receive loop ended with state {ws.State}"));
         }
-        catch (OperationCanceledException) { }
-        catch (WebSocketException ex) { _handshakeDone = false; OnDisconnected?.Invoke(ex.Message); }
+        catch (OperationCanceledException) { CancelPendingRequests(ct); }
+        catch (Exception) when (ct.IsCancellationRequested) { CancelPendingRequests(ct); }
+        catch (Exception ex) { HandleReceiveFailure(ex); }
+    }
+
+    private void HandleReceiveFailure(Exception error)
+    {
+        _handshakeDone = false;
+        FailPendingRequests(error);
+        try
+        {
+            Logger.Error($"Receive loop failed: {error.Message}");
+        }
+        finally
+        {
+            OnDisconnected?.Invoke(error.Message);
+        }
+    }
+
+    private void FailPendingRequests(Exception error)
+    {
+        lock (_pendingGate)
+        {
+            _acceptingRequests = false;
+            foreach (var entry in _pending)
+                if (_pending.TryRemove(entry.Key, out var tcs))
+                    tcs.TrySetException(error);
+        }
+    }
+
+    private void CancelPendingRequests(CancellationToken cancellationToken)
+    {
+        lock (_pendingGate)
+        {
+            _acceptingRequests = false;
+            foreach (var entry in _pending)
+                if (_pending.TryRemove(entry.Key, out var tcs))
+                    tcs.TrySetCanceled(cancellationToken);
+        }
     }
 
     private void ProcessFrame(string rawJson)
@@ -359,6 +454,13 @@ public class GatewayClient : IDisposable
         {
             var eventName = evtEl.GetString() ?? "";
 
+            // 过滤心跳/确认等无用事件
+            if (IsNoiseEvent(eventName, payload))
+            {
+                Logger.Info($"Filtered noise event: {eventName}");
+                return;
+            }
+
             // chat event
             if (eventName == "chat")
             {
@@ -446,10 +548,57 @@ public class GatewayClient : IDisposable
     public async Task DisconnectAsync()
     {
         _cts?.Cancel();
+        CancelPendingRequests(_cts?.Token ?? new CancellationToken(canceled: true));
         if (_ws?.State == WebSocketState.Open)
             try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch { }
         _ws?.Dispose(); _ws = null; _handshakeDone = false;
     }
 
-    public void Dispose() { _cts?.Cancel(); _cts?.Dispose(); _ws?.Dispose(); }
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        CancelPendingRequests(_cts?.Token ?? new CancellationToken(canceled: true));
+        _cts?.Dispose();
+        _ws?.Dispose();
+    }
+
+    /// <summary>
+    /// 判断事件是否为心跳/确认等无用噪声事件，应静默丢弃。
+    /// </summary>
+    private static bool IsNoiseEvent(string eventName, JsonElement payload)
+    {
+        // 服务端明确标记的心跳事件（agent 事件中 isHeartbeat=true）
+        if (payload.TryGetProperty("isHeartbeat", out var ihb)
+            && ihb.ValueKind == JsonValueKind.True)
+        {
+            return true;
+        }
+
+        // 心跳事件类型
+        if (eventName.Equals("heartbeat", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Equals("ping", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Equals("pong", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Equals("noop", StringComparison.OrdinalIgnoreCase) ||
+            eventName.Equals("keepalive", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 检查 payload 中的 deltaText 是否为噪声文本
+        if (payload.TryGetProperty("deltaText", out var dt) && dt.GetString() is string txt && txt.Length > 0)
+        {
+            if (MessageFilter.IsNoiseText(txt))
+                return true;
+        }
+
+        // 检查 payload 中的 content 是否为噪声文本
+        if (payload.TryGetProperty("content", out var ct) && ct.ValueKind == JsonValueKind.String)
+        {
+            var content = ct.GetString() ?? "";
+            if (MessageFilter.IsNoiseText(content))
+                return true;
+        }
+
+        return false;
+    }
 }

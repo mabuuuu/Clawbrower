@@ -116,7 +116,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 control.ContentRoot.Children.Clear();
                 control.ContentRoot.Children.Add(control._streamingBlock);
             }
-            control._streamingBlock.Text = e.NewValue as string ?? "";
+            control._streamingBlock.Text = MarkdownParser.SanitizeSurrogates(e.NewValue as string ?? "");
         }
         else
         {
@@ -135,6 +135,9 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     {
         ContentRoot.Children.Clear();
         _streamingBlock = null;
+
+        // Sanitize BEFORE anything touches FlowDocument — broken surrogates cause FailFast crash
+        markdown = MarkdownParser.SanitizeSurrogates(markdown);
 
         // Calculate page width from content: tight for short text, capped at available space
         var availableWidth = ComputeAvailableWidth();

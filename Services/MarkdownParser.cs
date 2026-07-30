@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Documents;
@@ -14,6 +15,11 @@ namespace Clawbrower.Services;
 /// </summary>
 public static class MarkdownParser
 {
+    /// <summary>
+    /// Remove orphaned UTF-16 surrogate characters that would crash WPF FlowDocument.
+    /// Delegates to MessageFilter.SanitizeSurrogates for the actual implementation.
+    /// </summary>
+    public static string SanitizeSurrogates(string text) => MessageFilter.SanitizeSurrogates(text);
     private static readonly WpfBrush CodeFg = new(WpfColor.FromRgb(0xE0, 0xE0, 0xE0));
     private static readonly WpfColor DimColor = WpfColor.FromRgb(0x88, 0x88, 0xAA);
 
@@ -329,6 +335,8 @@ public static class MarkdownParser
 
     private static void AddFormattedText(List<Inline> inlines, string text)
     {
+        // Sanitize BEFORE any text enters Run objects — broken surrogates crash WPF FlowDocument (FailFast)
+        text = SanitizeSurrogates(text);
         var pattern = @"(\*\*(.+?)\*\*)|(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(`(.+?)`)|(~~(.+?)~~)";
         var matches = Regex.Matches(text, pattern);
         var lastIndex = 0;
@@ -372,6 +380,7 @@ public static class MarkdownParser
         text = Regex.Replace(text, @"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", "$1");
         text = Regex.Replace(text, @"`(.+?)`", "$1");
         text = Regex.Replace(text, @"~~(.+?)~~", "$1");
-        return text;
+        // Ensure no broken surrogates survive into Run objects
+        return SanitizeSurrogates(text);
     }
 }

@@ -155,6 +155,26 @@ public static class ConfigService
 
     public static McpConfig GetMcpConfig() => Load().Mcp ?? new McpConfig();
     public static void SetMcpConfig(McpConfig cfg) { var s = Load(); s.Mcp = cfg; Save(); }
+
+    public static SpeechConfig GetSpeechConfig() => Load().Speech ?? new SpeechConfig();
+    public static void SetSpeechConfig(SpeechConfig cfg) { var s = Load(); s.Speech = cfg; Save(); }
+
+    /// <summary>
+    /// 从 GatewayUrl 提取主机名，拼接语音 WebSocket 地址 ws://host:9529/speech
+    /// </summary>
+    public static string GetSpeechServerUrl()
+    {
+        var gwUrl = GetGatewayUrl();
+        try
+        {
+            var uri = new Uri(gwUrl);
+            return $"ws://{uri.Host}:9529/speech";
+        }
+        catch
+        {
+            return "ws://127.0.0.1:9529/speech";
+        }
+    }
 }
 
 public class Settings
@@ -178,6 +198,7 @@ public class Settings
     public double WindowWidth { get; set; } = 420;
     public double WindowHeight { get; set; } = 580;
     public McpConfig? Mcp { get; set; }
+    public SpeechConfig? Speech { get; set; }
 }
 
 public class McpConfig
@@ -188,5 +209,26 @@ public class McpConfig
     public string FrpServerAddr { get; set; } = "124.222.90.15";
     public int FrpServerPort { get; set; } = 7000;
     public string FrpAuthToken { get; set; } = "cl@w2026";
+    public bool IsConfigured { get; set; } = false;
+}
+
+public enum SpeechMode
+{
+    PTT = 0,           // 按住说话
+    WakeWord = 1,      // 唤醒词（暂未实现，预留入口）
+}
+
+public class SpeechConfig
+{
+    /// <summary>语音功能是否启用</summary>
+    public bool IsEnabled { get; set; } = false;
+
+    /// <summary>语音交互模式</summary>
+    public SpeechMode Mode { get; set; } = SpeechMode.PTT;
+
+    /// <summary>PTT 按键的 Windows 虚拟键码 (VK)。默认 F12 = 0x7B = 123</summary>
+    public int PttVirtualKey { get; set; } = 0x7B;
+
+    /// <summary>是否已完成首次配置</summary>
     public bool IsConfigured { get; set; } = false;
 }

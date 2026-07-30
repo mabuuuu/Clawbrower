@@ -20,6 +20,7 @@ public class MainViewModel : INotifyPropertyChanged
     private string _lastDeltaText = "";
     private CancellationTokenSource? _streamTimeoutCts;
     private int _reconnectCount;
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
 
     // 配对轮询
     private bool _pairingPolling;
@@ -124,163 +125,217 @@ public class MainViewModel : INotifyPropertyChanged
 
     public async Task ConnectAsync(bool silent = false)
     {
-        State = AppState.Connecting;
-        if (!silent) AddSystemMessage("正在连接 OpenClaw Gateway...");
-        Logger.Info("ConnectAsync");
-
+        await _connectGate.WaitAsync();
+        GatewayClient? client = null;
         try
         {
-            _client?.Dispose();
-            _client = new GatewayClient(_gatewayUrl);
-            _client.OnConnected += () => SafeInvoke(async () =>
+            State = AppState.Connecting;
+            if (!silent) AddSystemMessage("正在连接 OpenClaw Gateway...");
+            Logger.Info("ConnectAsync");
+
+            try
             {
-                _reconnectCount = 0;
-                State = AppState.Connected;
-                AddSystemMessage("已连接到 OpenClaw Gateway");
-                await LoadSessionsAsync();
-            });
-            _client.OnPairingPending += (msg) => SafeInvoke(() =>
-            {
-                State = AppState.PairingPending;
-                if (!_pairingPolling)
+                _client?.Dispose();
+                client = new GatewayClient(_gatewayUrl);
+                _client = client;
+
+                bool IsCurrentClient() => ReferenceEquals(_client, client);
+
+                client.OnConnected += () => SafeInvoke(async () =>
                 {
-                    AddSystemMessage(msg);
-                    _ = StartPairingPoll();
-                }
-                else
+                    if (!IsCurrentClient()) return;
+                    _reconnectCount = 0;
+                    State = AppState.Connected;
+                    AddSystemMessage("已连接到 OpenClaw Gateway");
+                    await LoadSessionsAsync();
+                });
+
+                client.OnPairingPending += (msg) => SafeInvoke(() =>
                 {
-                    Logger.Info($"Pairing poll: still pending");
-                }
-            });
-            _client.OnDisconnected += (reason) => SafeInvoke(() =>
-            {
-                State = AppState.Disconnected;
-                StopStreaming();
-                AddSystemMessage($"连接断开: {reason}");
-                if (!silent)
-                    _ = Task.Run(async () => { await Task.Delay(3000); await SafeInvokeAsync(() => _ = AutoReconnectAsync()); });
-            });
-            _client.OnDeltaText += (sessionKey, text) => SafeInvoke(async () =>
-            {
-                // 只处理当前选中 session 的事件
-                if (sessionKey != _sessionKey) return;
-
-                // Web 端触发（非本地发送）：自动加载用户消息并开始流式
-                if (!IsStreaming)
-                {
-                    Logger.Info($"External stream detected for session {sessionKey}, loading recent history");
-                    await LoadRecentHistoryAsync();
-                    _currentAiMessage = "";
-                    _lastDeltaText = "";
-                    var aiMsg = new ChatMessage { Role = ChatRole.Assistant, Content = "", IsStreaming = true };
-                    Messages.Add(aiMsg);
-                    IsStreaming = true;
-                    ThinkingText = "思考中...";
-                    ResetStreamTimeout();
-                    OnMessageUpdated?.Invoke();
-                }
-
-                if (!IsStreaming) return;
-
-                // Skip consecutive identical substantial deltas (covers remaining duplication paths)
-                if (text.Length > 3 && text == _lastDeltaText)
-                {
-                    Logger.Info($"Delta dedup: skipped duplicate '{text[..Math.Min(text.Length, 40)]}'");
-                    return;
-                }
-                _lastDeltaText = text;
-
-                ThinkingText = "";
-                var preview = text.Length > 40 ? text[..40] + "..." : text;
-                Logger.Info($"Delta[{text.Length}]: {preview.Replace("\n", "\\n")}");
-                _currentAiMessage += text;
-                var ai = FindLastAssistantMessage();
-                if (ai != null) ai.Content = _currentAiMessage;
-                OnMessageUpdated?.Invoke();
-                ResetStreamTimeout();
-            });
-            _client.OnStreamReset += () => SafeInvoke(() =>
-            {
-                // Agent took priority over chat — clear any chat-sourced duplicate content
-                Logger.Info("Stream reset — clearing accumulated text");
-                _lastDeltaText = "";
-                _currentAiMessage = "";
-                var ai = FindLastAssistantMessage();
-                if (ai != null) ai.Content = "";
-                OnMessageUpdated?.Invoke();
-            });
-            _client.OnToolEvent += (name, status) => SafeInvoke(() =>
-            {
-                if (status == "started") ThinkingText = $"正在使用工具: {name}...";
-                else if (status == "completed") { ThinkingText = "思考中..."; ResetStreamTimeout(); }
-            });
-            _client.OnToolResult += (sessionKey, toolCallId, toolName, toolInput, output) => SafeInvoke(() =>
-            {
-                if (sessionKey != _sessionKey) return;
-                if (string.IsNullOrEmpty(toolInput) && string.IsNullOrEmpty(output)) return;
-
-                var content = string.IsNullOrEmpty(output)
-                    ? $"\n**TOOL INPUT:**\n{toolInput}"
-                    : $"\n**TOOL INPUT:**\n{toolInput}\n\n---\n**TOOL OUTPUT:**\n{output}";
-
-                // 同 toolCallId 去重：已存在则在新 output 更长时更新（command 的 summary 优于 tool 的 meta）
-                for (int i = 0; i < Messages.Count; i++)
-                {
-                    if (Messages[i].Id == toolCallId)
+                    if (!IsCurrentClient()) return;
+                    State = AppState.PairingPending;
+                    if (!_pairingPolling)
                     {
-                        if (output.Length > 0 && (string.IsNullOrEmpty(Messages[i].ToolInput) || output.Length > Messages[i].Content.Length))
+                        AddSystemMessage(msg);
+                        _ = StartPairingPoll();
+                    }
+                    else
+                    {
+                        Logger.Info("Pairing poll: still pending");
+                    }
+                });
+
+                client.OnDisconnected += (reason) => SafeInvoke(() =>
+                {
+                    if (!IsCurrentClient()) return;
+                    State = AppState.Disconnected;
+                    StopStreaming();
+                    AddSystemMessage($"连接断开: {reason}");
+                    if (!silent)
+                    {
+                        var disconnectedClient = client;
+                        _ = Task.Run(async () =>
                         {
-                            Messages[i].ToolInput = toolInput;
-                            Messages[i].Content = content;
-                            OnMessageUpdated?.Invoke();
-                        }
+                            await Task.Delay(3000);
+                            await SafeInvokeAsync(async () =>
+                            {
+                                if (!ReferenceEquals(_client, disconnectedClient)) return;
+                                await AutoReconnectAsync();
+                            });
+                        });
+                    }
+                });
+
+                client.OnDeltaText += (sessionKey, text) => SafeInvoke(async () =>
+                {
+                    if (!IsCurrentClient() || sessionKey != _sessionKey) return;
+
+                    if (MessageFilter.IsNoiseText(text))
+                    {
+                        Logger.Info($"Filtered noise delta: {text[..Math.Min(text.Length, 40)]}");
                         return;
                     }
-                }
 
-                var msg = new ChatMessage
-                {
-                    Id = toolCallId,
-                    Role = ChatRole.System,
-                    ToolName = toolName,
-                    ToolInput = toolInput,
-                    Content = content,
-                    IsStreaming = false
-                };
-
-                // 插入到最后一条 Assistant 消息之前（工具结果应在助手回复之前）
-                int insertAt = Messages.Count;
-                for (int i = Messages.Count - 1; i >= 0; i--)
-                {
-                    if (Messages[i].Role == ChatRole.Assistant)
+                    if (!IsStreaming)
                     {
-                        insertAt = i;
-                        break;
+                        Logger.Info($"External stream detected for session {sessionKey}, loading recent history");
+                        await LoadRecentHistoryAsync();
+                        _currentAiMessage = "";
+                        _lastDeltaText = "";
+                        var aiMsg = new ChatMessage { Role = ChatRole.Assistant, Content = "", IsStreaming = true };
+                        Messages.Add(aiMsg);
+                        IsStreaming = true;
+                        ThinkingText = "思考中...";
+                        ResetStreamTimeout();
+                        OnMessageUpdated?.Invoke();
                     }
-                }
-                if (insertAt == Messages.Count) Messages.Add(msg);
-                else Messages.Insert(insertAt, msg);
 
-                Logger.Info($"Tool result inserted: toolCallId={toolCallId}, name={toolName}, inputLen={toolInput.Length}, outputLen={output.Length}, at={insertAt}");
-                OnMessageUpdated?.Invoke();
-            });
-            _client.OnStreamComplete += (sessionKey) => SafeInvoke(() =>
+                    if (!IsStreaming) return;
+
+                    if (text.Length > 3 && text == _lastDeltaText)
+                    {
+                        Logger.Info($"Delta dedup: skipped duplicate '{text[..Math.Min(text.Length, 40)]}'");
+                        return;
+                    }
+                    _lastDeltaText = text;
+
+                    ThinkingText = "";
+                    var preview = text.Length > 40 ? text[..40] + "..." : text;
+                    Logger.Info($"Delta[{text.Length}]: {preview.Replace("\n", "\\n")}");
+                    _currentAiMessage += text;
+                    var ai = FindLastAssistantMessage();
+                    if (ai != null) ai.Content = _currentAiMessage;
+                    OnMessageUpdated?.Invoke();
+                    ResetStreamTimeout();
+                });
+
+                client.OnStreamReset += () => SafeInvoke(() =>
+                {
+                    if (!IsCurrentClient()) return;
+                    Logger.Info("Stream reset — clearing accumulated text");
+                    _lastDeltaText = "";
+                    _currentAiMessage = "";
+                    var ai = FindLastAssistantMessage();
+                    if (ai != null) ai.Content = "";
+                    OnMessageUpdated?.Invoke();
+                });
+
+                client.OnToolEvent += (name, status) => SafeInvoke(() =>
+                {
+                    if (!IsCurrentClient()) return;
+                    if (status == "started") ThinkingText = $"正在使用工具: {name}...";
+                    else if (status == "completed") { ThinkingText = "思考中..."; ResetStreamTimeout(); }
+                });
+
+                client.OnToolResult += (sessionKey, toolCallId, toolName, toolInput, output) => SafeInvoke(() =>
+                {
+                    if (!IsCurrentClient() || sessionKey != _sessionKey) return;
+                    if (string.IsNullOrEmpty(toolInput) && string.IsNullOrEmpty(output)) return;
+
+                    var content = string.IsNullOrEmpty(output)
+                        ? $"\n**TOOL INPUT:**\n{toolInput}"
+                        : $"\n**TOOL INPUT:**\n{toolInput}\n\n---\n**TOOL OUTPUT:**\n{output}";
+
+                    for (int i = 0; i < Messages.Count; i++)
+                    {
+                        if (Messages[i].Id == toolCallId)
+                        {
+                            if (output.Length > 0 && (string.IsNullOrEmpty(Messages[i].ToolInput) || output.Length > Messages[i].Content.Length))
+                            {
+                                Messages[i].ToolInput = toolInput;
+                                Messages[i].Content = content;
+                                OnMessageUpdated?.Invoke();
+                            }
+                            return;
+                        }
+                    }
+
+                    var msg = new ChatMessage
+                    {
+                        Id = toolCallId,
+                        Role = ChatRole.System,
+                        ToolName = toolName,
+                        ToolInput = toolInput,
+                        Content = content,
+                        IsStreaming = false
+                    };
+
+                    int insertAt = Messages.Count;
+                    for (int i = Messages.Count - 1; i >= 0; i--)
+                    {
+                        if (Messages[i].Role == ChatRole.Assistant)
+                        {
+                            insertAt = i;
+                            break;
+                        }
+                    }
+
+                    if (insertAt == Messages.Count) Messages.Add(msg);
+                    else Messages.Insert(insertAt, msg);
+
+                    Logger.Info($"Tool result inserted: toolCallId={toolCallId}, name={toolName}, inputLen={toolInput.Length}, outputLen={output.Length}, at={insertAt}");
+                    OnMessageUpdated?.Invoke();
+                });
+
+                client.OnStreamComplete += (sessionKey) => SafeInvoke(() =>
+                {
+                    if (!IsCurrentClient() || sessionKey != _sessionKey) return;
+                    StopStreaming();
+                });
+
+                client.OnError += (msg) => SafeInvoke(() =>
+                {
+                    if (!IsCurrentClient()) return;
+                    AddSystemMessage($"错误: {msg}");
+                });
+
+                await client.ConnectAsync();
+            }
+            catch (Exception ex)
             {
-                if (sessionKey != _sessionKey) return;
-                StopStreaming();
-            });
-            _client.OnError += (msg) => SafeInvoke(() => AddSystemMessage($"错误: {msg}"));
-
-            await _client.ConnectAsync();
+                if (client != null && !ReferenceEquals(_client, client)) return;
+                var errMsg = ex.InnerException != null ? $"{ex.Message} -> {ex.InnerException.Message}" : ex.Message;
+                Logger.Error($"Connect failed: {errMsg}");
+                State = AppState.Disconnected;
+                if (!silent) AddSystemMessage($"连接失败: {errMsg}");
+                if (!silent)
+                {
+                    var failedClient = client;
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(5000);
+                        await SafeInvokeAsync(async () =>
+                        {
+                            if (failedClient == null || !ReferenceEquals(_client, failedClient)) return;
+                            await AutoReconnectAsync();
+                        });
+                    });
+                }
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            var errMsg = ex.InnerException != null ? $"{ex.Message} -> {ex.InnerException.Message}" : ex.Message;
-            Logger.Error($"Connect failed: {errMsg}");
-            State = AppState.Disconnected;
-            if (!silent) AddSystemMessage($"连接失败: {errMsg}");
-            if (!silent)
-                _ = Task.Run(async () => { await Task.Delay(5000); await SafeInvokeAsync(() => _ = AutoReconnectAsync()); });
+            _connectGate.Release();
         }
     }
 
@@ -443,6 +498,27 @@ public class MainViewModel : INotifyPropertyChanged
         Messages.Add(new ChatMessage { Role = ChatRole.System, Content = text });
     }
 
+    /// <summary>
+    /// 语音 ASR 识别结果（用户说的话），显示为用户消息。
+    /// 不通过 Gateway 发送 -- 语音服务器已自行注入 OpenClaw 会话。
+    /// </summary>
+    public void AddSpeechTranscript(string text)
+    {
+        Logger.Info($"Speech transcript: {text}");
+        Messages.Add(new ChatMessage { Role = ChatRole.User, Content = $"🗣️ {text}" });
+        OnMessageUpdated?.Invoke();
+    }
+
+    /// <summary>
+    /// 语音助手回复文字，显示为助手消息。
+    /// </summary>
+    public void AddSpeechReply(string text)
+    {
+        Logger.Info($"Speech reply: {text}");
+        Messages.Add(new ChatMessage { Role = ChatRole.Assistant, Content = text });
+        OnMessageUpdated?.Invoke();
+    }
+
     public async Task StopAsync()
     {
         if (_client == null || !IsStreaming) return;
@@ -584,6 +660,8 @@ public class MainViewModel : INotifyPropertyChanged
                     continue;
                 var msg = ParseHistoryMessage(m);
                 if (string.IsNullOrEmpty(msg.Content) && msg.Role == ChatRole.Assistant)
+                    continue;
+                if (MessageFilter.IsNoiseMessage(msg))
                     continue;
                 historyMessages.Add(msg);
             }
@@ -882,6 +960,8 @@ public class MainViewModel : INotifyPropertyChanged
                 var msg = ParseHistoryMessage(m);
                 if (string.IsNullOrEmpty(msg.Content) && msg.Role == ChatRole.Assistant)
                     continue;
+                if (MessageFilter.IsNoiseMessage(msg))
+                    continue;
                 historyMessages.Add(msg);
             }
 
@@ -906,6 +986,12 @@ public class MainViewModel : INotifyPropertyChanged
     public void ClearCurrentSessionMessages()
     {
         Logger.Info($"Clearing local messages for session: {_sessionKey}");
+        _streamTimeoutCts?.Cancel();
+        _streamTimeoutCts = null;
+        _currentAiMessage = "";
+        _lastDeltaText = "";
+        IsStreaming = false;
+        ThinkingText = "";
         Messages.Clear();
         AddSystemMessage("已清除本地聊天记录（服务端历史不受影响）");
         OnMessageUpdated?.Invoke();

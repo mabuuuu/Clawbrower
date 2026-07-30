@@ -55,7 +55,9 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
         get => _content;
         set
         {
-            _content = value;
+            // Sanitize BEFORE storing — orphaned UTF-16 surrogates crash WPF FlowDocument with FailFast.
+            // This is the single chokepoint where ALL message text enters the UI binding pipeline.
+            _content = MessageFilter.SanitizeSurrogates(value);
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Content)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSystemCollapsible)));
         }
@@ -97,6 +99,128 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
 }
 
 public enum ChatRole { User, Assistant, System }
+
+public static class MessageFilter
+{
+    /// <summary>
+    /// 已知的无用消息内容模式（服务端心跳/确认/空操作等）。
+    /// 匹配时忽略大小写和首尾空白。
+    /// </summary>
+    private static readonly string[] NoisePatterns =
+    {
+        "HEARTBEAT_OK",
+        "HEARTBEAT_ACK",
+        "ARTBEAT_OK",      // HEARTBEAT_OK 被截断首字母的变体
+        "PING",
+        "PONG",
+        "ACK_OK",
+        "NOOP",
+        "KEEPALIVE",
+        "KEEPALIVE_OK",
+    };
+
+    /// <summary>
+    /// 判断一条消息是否为无用噪声消息（心跳、确认等），应从 UI 中过滤掉。
+    /// 注意：心跳消息的 role 可能是 assistant（服务端将心跳流存储为 assistant 消息），
+    /// 因此不能仅按 role=system 过滤，必须检查内容。
+    /// </summary>
+    public static bool IsNoiseMessage(ChatMessage msg)
+    {
+        var content = msg.Content?.Trim();
+        if (string.IsNullOrEmpty(content)) return false;
+
+        // 精确匹配已知噪声模式
+        foreach (var pattern in NoisePatterns)
+        {
+            if (content.Equals(pattern, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        // 匹配 HEARTBEAT* / ARTBEAT* / PING* / PONG* / ACK* / NOOP* / KEEPALIVE* 前缀模式
+        if (content.StartsWith("HEARTBEAT", StringComparison.OrdinalIgnoreCase) ||
+            content.StartsWith("ARTBEAT", StringComparison.OrdinalIgnoreCase) ||
+            content.StartsWith("PING", StringComparison.OrdinalIgnoreCase) ||
+            content.StartsWith("PONG", StringComparison.OrdinalIgnoreCase) ||
+            content.StartsWith("ACK_", StringComparison.OrdinalIgnoreCase) ||
+            content.StartsWith("NOOP", StringComparison.OrdinalIgnoreCase) ||
+            content.StartsWith("KEEPALIVE", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 判断实时推送的文本内容是否为无用噪声（如心跳确认文本）。
+    /// </summary>
+    public static bool IsNoiseText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        var trimmed = text.Trim();
+
+        foreach (var pattern in NoisePatterns)
+        {
+            if (trimmed.Equals(pattern, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        if (trimmed.StartsWith("HEARTBEAT", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("ARTBEAT", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("PING", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("PONG", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("ACK_", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("NOOP", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("KEEPALIVE", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Remove orphaned UTF-16 surrogate characters that would crash WPF FlowDocument.
+    /// WPF's TextParaClient.CreateLineVisual calls FailFast on broken surrogate pairs,
+    /// which terminates the process immediately — no try/catch can intercept it.
+    /// </summary>
+    public static string SanitizeSurrogates(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        // Fast path: scan for any surrogate characters first
+        bool hasSurrogate = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (char.IsSurrogate(text[i])) { hasSurrogate = true; break; }
+        }
+        if (!hasSurrogate) return text;
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (char.IsHighSurrogate(c))
+            {
+                if (i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+                {
+                    sb.Append(c);
+                    sb.Append(text[i + 1]);
+                    i++;
+                }
+                // else: orphaned high surrogate — skip
+            }
+            else if (char.IsLowSurrogate(c))
+            {
+                // orphaned low surrogate — skip
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
+    }
+}
 
 public class SessionInfo
 {

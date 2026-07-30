@@ -6,6 +6,7 @@ namespace Clawbrower.Services;
 
 public static class Logger
 {
+    private static readonly System.Text.UTF8Encoding LogEncoding = new(false, false);
     private static readonly string _dir;
     private static string _path;
     private static string _currentDate = "";
@@ -43,7 +44,7 @@ public static class Logger
         var today = now.ToString("yyyy-MM-dd");
         if (today != _currentDate) RefreshPath();
         var line = $"{now:yyyy-MM-dd HH:mm:ss.fff} [{level}] [{caller}] {msg}";
-        lock (_lock) File.AppendAllText(_path, line + Environment.NewLine);
+        lock (_lock) File.AppendAllText(_path, line + Environment.NewLine, LogEncoding);
     }
 
     public static string LogPath => _path;
