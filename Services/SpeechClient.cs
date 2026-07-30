@@ -16,6 +16,7 @@ public class SpeechClient : IDisposable
     private CancellationTokenSource? _cts;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private bool _disposed;
+    private TaskCompletionSource<bool>? _sessionOkTcs;
 
     private const int ReceiveBufferSize = 16 * 1024;
 
@@ -43,8 +44,8 @@ public class SpeechClient : IDisposable
     /// <summary>是否已连接</summary>
     public bool IsConnected => _ws?.State == WebSocketState.Open;
 
-    /// <summary>连接语音服务器</summary>
-    public async Task ConnectAsync(string url)
+    /// <summary>连接语音服务器并发送 session 握手</summary>
+    public async Task ConnectAsync(string url, string sessionKey)
     {
         _cts = new CancellationTokenSource();
         _ws = new ClientWebSocket();
@@ -55,8 +56,35 @@ public class SpeechClient : IDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, connectCts.Token);
         await _ws.ConnectAsync(new Uri(url), linked.Token);
 
-        Logger.Info("SpeechClient connected");
+        Logger.Info("SpeechClient connected, starting receive loop");
         _ = ReceiveLoopAsync(_ws, _cts.Token);
+
+        // 发送 session 握手，等待 session_ok
+        var sessionMsg = $"{{\"type\":\"session\",\"session_key\":\"{sessionKey}\"}}";
+        var sessionBytes = Encoding.UTF8.GetBytes(sessionMsg);
+        await _sendGate.WaitAsync(_cts.Token);
+        try
+        {
+            if (_ws.State == WebSocketState.Open)
+                await _ws.SendAsync(new ArraySegment<byte>(sessionBytes), WebSocketMessageType.Text, true, _cts.Token);
+        }
+        finally { _sendGate.Release(); }
+
+        Logger.Info($"SpeechClient session sent, session_key={sessionKey}");
+
+        // 等待 session_ok（带超时）
+        _sessionOkTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sessionTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var sessionLinked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, sessionTimeout.Token);
+        sessionLinked.Token.Register(() => _sessionOkTcs.TrySetResult(false));
+        var sessionOk = await _sessionOkTcs.Task;
+        _sessionOkTcs = null;
+
+        if (!sessionOk)
+        {
+            throw new InvalidOperationException("语音服务器 session 握手超时，未收到 session_ok");
+        }
+        Logger.Info("SpeechClient session_ok received");
     }
 
     /// <summary>发送音频分片（二进制 PCM）</summary>
@@ -226,6 +254,11 @@ public class SpeechClient : IDisposable
                 case "audio_end":
                     Logger.Info("SpeechClient audio_end received");
                     OnAudioEnd?.Invoke();
+                    break;
+
+                case "session_ok":
+                    Logger.Info("SpeechClient session_ok received");
+                    _sessionOkTcs?.TrySetResult(true);
                     break;
 
                 case "error":

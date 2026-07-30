@@ -151,6 +151,11 @@ public class SpeechService : IDisposable
             _client = new SpeechClient();
             RegisterSpeechClientEvents(_client);
 
+            // 获取当前会话 key
+            var sessionKey = "agent:main:main";
+            if (Application.Current?.MainWindow?.DataContext is ViewModels.MainViewModel vm)
+                sessionKey = vm.SessionKey;
+
             SetState(SpeechState.Recording);
             _capture.ResetVoiceState();
             _capture.Start(); // 立即开始录音，不等连接（连接前的音频块在连接建立前会被 SendAudioAsync 丢弃）
@@ -159,8 +164,8 @@ public class SpeechService : IDisposable
             {
                 try
                 {
-                    await _client.ConnectAsync(url);
-                    // 连接成功后录音已在进行，OnAudioCaptured 会自动发送音频
+                    await _client.ConnectAsync(url, sessionKey);
+                    // 连接+session握手成功后，录音已在进行，OnAudioCaptured 会自动发送音频
                     OnStatusMessage?.Invoke("语音服务器已连接");
                 }
                 catch (Exception ex)

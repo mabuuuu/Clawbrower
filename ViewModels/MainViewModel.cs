@@ -14,6 +14,9 @@ public class MainViewModel : INotifyPropertyChanged
 {
     private string _gatewayUrl = ConfigService.GetGatewayUrl();
     private string _sessionKey = "agent:main:main";
+
+    /// <summary>当前会话 key（用于语音连接等需要关联会话的场景）</summary>
+    public string SessionKey => _sessionKey;
     private GatewayClient? _client;
     private AppState _state;
     private string _currentAiMessage = "";
