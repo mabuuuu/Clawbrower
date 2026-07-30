@@ -15,6 +15,9 @@ public class AudioCaptureService : IDisposable
 
     private WaveInEvent? _waveIn;
     private bool _capturing;
+    private bool _stopping;
+    private readonly object _stopLock = new();
+    private TaskCompletionSource<bool>? _stopTcs;
 
     /// <summary>采集到音频数据时触发（buffer 为有效数据，已裁剪到 BytesRecorded）</summary>
     public event Action<byte[]>? OnAudioData;
@@ -64,11 +67,11 @@ public class AudioCaptureService : IDisposable
         }
     }
 
-    /// <summary>停止采集</summary>
+    /// <summary>停止采集（不立即丢弃缓冲音频，待 OnRecordingStopped 才置 _capturing=false）</summary>
     public void Stop()
     {
-        if (!_capturing) return;
-        _capturing = false;
+        if (!_capturing || _stopping) return;
+        _stopping = true;
         try
         {
             _waveIn?.StopRecording();
@@ -76,6 +79,21 @@ public class AudioCaptureService : IDisposable
         catch (Exception ex)
         {
             Logger.Error($"AudioCapture stop error: {ex.Message}");
+        }
+    }
+
+    /// <summary>停止采集并等待 NAudio 完全停止（所有缓冲音频已通过 OnAudioData 发出）后完成</summary>
+    public Task StopAsync()
+    {
+        lock (_stopLock)
+        {
+            if (!_capturing) return Task.CompletedTask;
+            if (_stopTcs == null)
+            {
+                _stopTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Stop();
+            }
+            return _stopTcs.Task;
         }
     }
 
@@ -145,7 +163,13 @@ public class AudioCaptureService : IDisposable
         }
         _waveIn?.Dispose();
         _waveIn = null;
-        _capturing = false;
+        lock (_stopLock)
+        {
+            _capturing = false;
+            _stopping = false;
+            _stopTcs?.TrySetResult(true);
+            _stopTcs = null;
+        }
         Logger.Info("AudioCapture fully stopped");
     }
 

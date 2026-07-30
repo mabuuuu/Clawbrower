@@ -122,11 +122,20 @@ public class SpeechService : IDisposable
 
     private void OnPttKeyDown()
     {
-        // 只在 Listening 状态响应 PTT 按下
-        if (_state != SpeechState.Listening) return;
+        // 只在 Listening 或 Playing 状态响应 PTT 按下
+        if (_state != SpeechState.Listening && _state != SpeechState.Playing) return;
 
         Application.Current?.Dispatcher.Invoke(() =>
         {
+            // 如果正在播放语音，打断播放
+            if (_state == SpeechState.Playing)
+            {
+                _player.Stop();
+                DisconnectClient();
+                _mp3Buffer.SetLength(0);
+                SetState(SpeechState.Listening);
+            }
+
             if (_state != SpeechState.Listening) return;
 
             _mp3Buffer.SetLength(0);
@@ -176,26 +185,42 @@ public class SpeechService : IDisposable
     {
         if (_state != SpeechState.Recording) return;
 
-        Application.Current?.Dispatcher.Invoke(() =>
+        _ = Task.Run(async () =>
         {
-            if (_state != SpeechState.Recording) return;
-
-            _capture.Stop();
-
-            // 发送结束标记
-            if (_client?.IsConnected == true)
+            // 等待录音完全停止：NAudio 的 RecordingStopped 触发时，
+            // 所有缓冲音频已通过 OnAudioCaptured 发出（状态仍为 Recording，不会被丢弃）
+            try
             {
-                SetState(SpeechState.Waiting);
-                OnStatusMessage?.Invoke("正在识别...");
-                _ = _client.SendEndAsync();
+                await _capture.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
             }
-            else
+            catch (TimeoutException)
             {
-                // 连接未建立或已断开，回到 Listening
-                DisconnectClient();
-                SetState(SpeechState.Listening);
-                OnStatusMessage?.Invoke("语音连接未就绪，请重试");
+                Logger.Error("AudioCapture stop timeout, sending end anyway");
             }
+            catch (Exception ex)
+            {
+                Logger.Error($"AudioCapture stop failed: {ex.Message}");
+            }
+
+            await Application.Current!.Dispatcher.InvokeAsync(() =>
+            {
+                if (_state != SpeechState.Recording) return;
+
+                // 发送结束标记（此时最后缓冲的音频已全部发出）
+                if (_client?.IsConnected == true)
+                {
+                    SetState(SpeechState.Waiting);
+                    OnStatusMessage?.Invoke("正在识别...");
+                    _ = _client.SendEndAsync();
+                }
+                else
+                {
+                    // 连接未建立或已断开，回到 Listening
+                    DisconnectClient();
+                    SetState(SpeechState.Listening);
+                    OnStatusMessage?.Invoke("语音连接未就绪，请重试");
+                }
+            });
         });
     }
 
