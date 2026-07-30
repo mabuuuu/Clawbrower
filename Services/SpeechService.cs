@@ -55,8 +55,19 @@ public class SpeechService : IDisposable
         _keyboard.OnKeyUp += OnPttKeyUp;
         _capture.OnAudioData += OnAudioCaptured;
         _capture.OnError += OnCaptureError;
+        _capture.OnVoiceActivityChanged += OnVoiceActivityChanged;
         _player.OnPlaybackCompleted += OnPlaybackCompleted;
         _player.OnError += OnPlaybackError;
+    }
+
+    /// <summary>声音活动变化 -> 切换录音浮层红/绿点（切到 UI 线程）</summary>
+    private void OnVoiceActivityChanged(bool speaking)
+    {
+        Application.Current?.Dispatcher.Invoke(() =>
+        {
+            if (_state == SpeechState.Recording)
+                _overlay?.SetSpeaking(speaking);
+        });
     }
 
     /// <summary>
@@ -122,22 +133,26 @@ public class SpeechService : IDisposable
 
             // 连接语音服务器
             var url = ConfigService.GetSpeechServerUrl();
+            if (string.IsNullOrEmpty(url))
+            {
+                OnStatusMessage?.Invoke("未配置语音服务器地址，请在设置中填写");
+                SetState(SpeechState.Listening);
+                return;
+            }
             _client = new SpeechClient();
             RegisterSpeechClientEvents(_client);
 
             SetState(SpeechState.Recording);
+            _capture.ResetVoiceState();
+            _capture.Start(); // 立即开始录音，不等连接（连接前的音频块在连接建立前会被 SendAudioAsync 丢弃）
 
             _ = Task.Run(async () =>
             {
                 try
                 {
                     await _client.ConnectAsync(url);
-                    // 连接成功后开始录音
-                    Application.Current?.Dispatcher.Invoke(() =>
-                    {
-                        if (_state == SpeechState.Recording)
-                            _capture.Start();
-                    });
+                    // 连接成功后录音已在进行，OnAudioCaptured 会自动发送音频
+                    OnStatusMessage?.Invoke("语音服务器已连接");
                 }
                 catch (Exception ex)
                 {
@@ -145,6 +160,7 @@ public class SpeechService : IDisposable
                     Application.Current?.Dispatcher.Invoke(() =>
                     {
                         OnStatusMessage?.Invoke($"语音服务器连接失败: {ex.Message}");
+                        _capture.Stop();
                         DisconnectClient();
                         if (_state == SpeechState.Recording || _state == SpeechState.Waiting)
                             SetState(SpeechState.Listening);

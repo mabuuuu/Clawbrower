@@ -22,6 +22,18 @@ public class AudioCaptureService : IDisposable
     /// <summary>采集出错时触发</summary>
     public event Action<string>? OnError;
 
+    /// <summary>声音活动变化：true=检测到说话，false=转为静默（带防抖）</summary>
+    public event Action<bool>? OnVoiceActivityChanged;
+
+    // ── 声音检测参数 ──
+    /// <summary>归一化 RMS 阈值（0~1）。环境噪声约 0.005-0.01，正常说话约 0.03-0.1。</summary>
+    private const double VoiceRmsThreshold = 0.015;
+    /// <summary>连续静默帧数达到此值才判定停止说话（每帧≈200ms，3帧≈600ms 防闪烁）</summary>
+    private const int SilenceFramesToStop = 3;
+
+    private bool _voiceActive;
+    private int _silenceFrameCount;
+
     /// <summary>当前是否正在采集</summary>
     public bool IsCapturing => _capturing;
 
@@ -75,6 +87,53 @@ public class AudioCaptureService : IDisposable
         var data = new byte[e.BytesRecorded];
         Array.Copy(e.Buffer, data, e.BytesRecorded);
         OnAudioData?.Invoke(data);
+
+        // 声音活动检测
+        DetectVoiceActivity(data);
+    }
+
+    /// <summary>计算 16bit PCM 的 RMS 归一化音量，判定是否在说话（带防抖）</summary>
+    private void DetectVoiceActivity(byte[] data)
+    {
+        var sampleCount = data.Length / 2; // 16bit = 2 bytes/sample
+        if (sampleCount == 0) return;
+
+        double sumSquares = 0;
+        for (var i = 0; i < sampleCount; i++)
+        {
+            // little-endian 16bit PCM sample
+            var sample = (short)(data[i * 2] | (data[i * 2 + 1] << 8));
+            var normalized = sample / 32768.0;
+            sumSquares += normalized * normalized;
+        }
+        var rms = Math.Sqrt(sumSquares / sampleCount);
+        var hasVoice = rms > VoiceRmsThreshold;
+
+        if (hasVoice)
+        {
+            _silenceFrameCount = 0;
+            if (!_voiceActive)
+            {
+                _voiceActive = true;
+                OnVoiceActivityChanged?.Invoke(true);
+            }
+        }
+        else
+        {
+            _silenceFrameCount++;
+            if (_voiceActive && _silenceFrameCount >= SilenceFramesToStop)
+            {
+                _voiceActive = false;
+                OnVoiceActivityChanged?.Invoke(false);
+            }
+        }
+    }
+
+    /// <summary>重置声音检测状态（每次开始录音前调用）</summary>
+    public void ResetVoiceState()
+    {
+        _voiceActive = false;
+        _silenceFrameCount = 0;
     }
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
