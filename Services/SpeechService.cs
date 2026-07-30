@@ -26,6 +26,7 @@ public class SpeechService : IDisposable
     private readonly MemoryStream _mp3Buffer = new();
     private SpeechState _state = SpeechState.Disabled;
     private bool _disposed;
+    private bool _intentionalDisconnect;
     private RecordingOverlay? _overlay;
 
     /// <summary>语音状态变化</summary>
@@ -130,6 +131,7 @@ public class SpeechService : IDisposable
             // 如果正在播放语音，打断播放
             if (_state == SpeechState.Playing)
             {
+                _intentionalDisconnect = true;
                 _player.Stop();
                 DisconnectClient();
                 _mp3Buffer.SetLength(0);
@@ -165,15 +167,17 @@ public class SpeechService : IDisposable
                 try
                 {
                     await _client.ConnectAsync(url, sessionKey);
-                    // 连接+session握手成功后，录音已在进行，OnAudioCaptured 会自动发送音频
-                    OnStatusMessage?.Invoke("语音服务器已连接");
+                    // 连接+session握手成功，OnAudioCaptured 会自动发送音频
                 }
                 catch (Exception ex)
                 {
                     Logger.Error($"SpeechClient connect failed: {ex.Message}");
                     Application.Current?.Dispatcher.Invoke(() =>
                     {
-                        OnStatusMessage?.Invoke($"语音服务器连接失败: {ex.Message}");
+                        // 用户主动打断时不提示连接失败
+                        if (!_intentionalDisconnect)
+                            OnStatusMessage?.Invoke($"语音服务器连接失败: {ex.Message}");
+                        _intentionalDisconnect = false;
                         _capture.Stop();
                         DisconnectClient();
                         if (_state == SpeechState.Recording || _state == SpeechState.Waiting)
@@ -181,8 +185,6 @@ public class SpeechService : IDisposable
                     });
                 }
             });
-
-            OnStatusMessage?.Invoke("正在录音...");
         });
     }
 
@@ -215,7 +217,6 @@ public class SpeechService : IDisposable
                 if (_client?.IsConnected == true)
                 {
                     SetState(SpeechState.Waiting);
-                    OnStatusMessage?.Invoke("正在识别...");
                     _ = _client.SendEndAsync();
                 }
                 else
@@ -256,14 +257,7 @@ public class SpeechService : IDisposable
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
-                var msg = stage switch
-                {
-                    "asr" => "正在识别语音...",
-                    "thinking" => "正在思考...",
-                    "tts" => "正在合成语音...",
-                    _ => $"状态: {stage}"
-                };
-                OnStatusMessage?.Invoke(msg);
+                Logger.Info($"SpeechService status: {stage}");
             });
         };
 
@@ -344,7 +338,6 @@ public class SpeechService : IDisposable
         }
 
         SetState(SpeechState.Playing);
-        OnStatusMessage?.Invoke("正在播放回复语音...");
         _player.PlayMp3(mp3Data);
     }
 
