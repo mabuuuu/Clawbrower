@@ -379,11 +379,23 @@ public class SpeechService : IDisposable
         var old = _state;
         _state = newState;
 
-        // 录音浮层：进入 Recording 显示，离开时隐藏
-        if (newState == SpeechState.Recording)
-            _overlay?.Show();
-        else if (old == SpeechState.Recording)
-            _overlay?.Hide();
+        // 录音浮层：Recording/Waiting/Playing 显示并更新状态文字，离开时隐藏
+        switch (newState)
+        {
+            case SpeechState.Recording:
+                _overlay?.Show();
+                _overlay?.SetState(newState);
+                break;
+            case SpeechState.Waiting:
+            case SpeechState.Playing:
+                _overlay?.Show();
+                _overlay?.SetState(newState);
+                break;
+            default:
+                if (old == SpeechState.Recording || old == SpeechState.Waiting || old == SpeechState.Playing)
+                    _overlay?.Hide();
+                break;
+        }
 
         Logger.Info($"SpeechService state: {old} -> {newState}");
         OnStateChanged?.Invoke(newState);

@@ -33,7 +33,7 @@
                     </EventTrigger>
                 </Ellipse.Triggers>
             </Ellipse>
-            <TextBlock Text="说话中..." FontSize="16" FontWeight="SemiBold"
+            <TextBlock x:Name="StateText" Text="说话中..." FontSize="16" FontWeight="SemiBold"
                        Foreground="#EEEEEE" VerticalAlignment="Center"/>
         </StackPanel>
     </Border>

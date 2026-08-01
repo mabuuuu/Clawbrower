@@ -1,4 +1,5 @@
 using System.Windows;
+using Clawbrower.Services;
 using Media = System.Windows.Media;
 
 namespace Clawbrower;
@@ -8,8 +9,9 @@ namespace Clawbrower;
 /// </summary>
 public partial class RecordingOverlay : Window
 {
-    private static readonly Media.Color SilentColor = Media.Color.FromRgb(0xEF, 0x44, 0x44);  // 红
-    private static readonly Media.Color SpeakingColor = Media.Color.FromRgb(0x22, 0xC5, 0x5E); // 绿
+    private static readonly Media.Color SilentColor = Media.Color.FromRgb(0xEF, 0x44, 0x44);   // 红（录音静默）
+    private static readonly Media.Color SpeakingColor = Media.Color.FromRgb(0x22, 0xC5, 0x5E); // 绿（说话中）
+    private static readonly Media.Color ThinkingColor = Media.Color.FromRgb(0x3B, 0x82, 0xF6); // 蓝（思考中）
 
     public RecordingOverlay()
     {
@@ -21,8 +23,32 @@ public partial class RecordingOverlay : Window
     public new void Show()
     {
         PositionBottomCenter();
-        SetSpeaking(false); // 显示时默认静默状态（红点）
+        SetState(SpeechService.SpeechState.Listening); // 默认静默状态（红点）
         base.Show();
+    }
+
+    /// <summary>按语音状态更新浮层文字与颜色</summary>
+    public void SetState(SpeechService.SpeechState state)
+    {
+        switch (state)
+        {
+            case SpeechService.SpeechState.Recording:
+                StateText.Text = "说话中...";
+                PulseBrush.Color = SilentColor; // 声音检测到后由 SetSpeaking 变绿
+                break;
+            case SpeechService.SpeechState.Waiting:
+                StateText.Text = "思考中...";
+                PulseBrush.Color = ThinkingColor;
+                break;
+            case SpeechService.SpeechState.Playing:
+                StateText.Text = "说话中...";
+                PulseBrush.Color = SpeakingColor;
+                break;
+            default:
+                StateText.Text = "说话中...";
+                PulseBrush.Color = SilentColor;
+                break;
+        }
     }
 
     /// <summary>设置是否检测到声音：true=绿点（说话中），false=红点（静默）</summary>
