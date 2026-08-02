@@ -34,11 +34,16 @@ public class AudioPlayer : IDisposable
         {
             var ms = new MemoryStream(mp3Data);
             var reader = new Mp3FileReader(ms);
-            _waveOut = new WaveOutEvent();
-            _waveOut.Init(reader);
-            _waveOut.PlaybackStopped += (s, e) =>
+            var current = new WaveOutEvent(); // 局部引用：区分"当前播放器"与"被替换的旧播放器"
+            _waveOut = current;
+            current.Init(reader);
+            current.PlaybackStopped += (s, e) =>
             {
+                // 只有当前播放器自然停止才触发完成；旧播放器/主动 Stop 的延迟回调不触发
+                if (!ReferenceEquals(_waveOut, current)) return;
+
                 Logger.Info($"AudioPlayer playback stopped, error={e.Exception?.Message ?? "none"}");
+                _waveOut = null;
                 if (e.Exception != null)
                     OnError?.Invoke($"播放异常: {e.Exception.Message}");
                 else
@@ -47,10 +52,9 @@ public class AudioPlayer : IDisposable
                 // 清理资源
                 reader.Dispose();
                 ms.Dispose();
-                _waveOut?.Dispose();
-                _waveOut = null;
+                current.Dispose();
             };
-            _waveOut.Play();
+            current.Play();
             Logger.Info($"AudioPlayer playing mp3, size={mp3Data.Length} bytes");
         }
         catch (Exception ex)

@@ -25,6 +25,7 @@ public class SpeechService : IDisposable
     private SpeechClient? _client;
     private readonly Queue<byte[]> _playQueue = new();
     private bool _audioEnded;
+    private bool _isPlayingChunk;
     private SpeechState _state = SpeechState.Disabled;
     private bool _disposed;
     private bool _intentionalDisconnect;
@@ -300,8 +301,8 @@ public class SpeechService : IDisposable
                 // audio_end 语义：所有分句已下发完毕（不是音频已全部到达）
                 _audioEnded = true;
                 Logger.Info($"SpeechService audio_end received, queue={_playQueue.Count}");
-                // 若队列已空且无播放，直接结束本轮
-                if (_playQueue.Count == 0 && !_player.IsPlaying)
+                // 若队列已空且没有块在播，直接结束本轮
+                if (_playQueue.Count == 0 && !_isPlayingChunk)
                 {
                     DisconnectClient();
                     SetState(SpeechState.Listening);
@@ -343,6 +344,9 @@ public class SpeechService : IDisposable
     /// <summary>播放下一个音频块（队列空且收到 audio_end 则结束本轮）</summary>
     private void PlayNextChunk()
     {
+        // 防重入：已有块在播放时，忽略重复调度（OnMp3Data 与 OnPlaybackCompleted 可能竞态）
+        if (_isPlayingChunk) return;
+
         if (_playQueue.Count == 0)
         {
             // 队列空：若已收到 audio_end（所有分句已下发），结束本轮
@@ -355,6 +359,7 @@ public class SpeechService : IDisposable
             return;
         }
 
+        _isPlayingChunk = true;
         var chunk = _playQueue.Dequeue();
         if (_state != SpeechState.Playing)
             SetState(SpeechState.Playing);
@@ -362,18 +367,20 @@ public class SpeechService : IDisposable
         Logger.Info($"SpeechService playing chunk, remaining={_playQueue.Count}");
     }
 
-    /// <summary>清空播放队列并重置 audio_end 标记</summary>
+    /// <summary>清空播放队列并重置 audio_end/播放中标记</summary>
     private void ClearPlayQueue()
     {
         _playQueue.Clear();
         _audioEnded = false;
+        _isPlayingChunk = false;
     }
 
     private void OnPlaybackCompleted()
     {
         Application.Current?.Dispatcher.Invoke(() =>
         {
-            // 当前块播完，继续播队列中的下一块（边收边播）
+            // 当前块已自然播完，重置标记并播队列中的下一块（边收边播）
+            _isPlayingChunk = false;
             PlayNextChunk();
             Logger.Info("SpeechService chunk playback completed");
         });
