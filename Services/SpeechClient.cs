@@ -261,6 +261,17 @@ public class SpeechClient : IDisposable
                     _sessionOkTcs?.TrySetResult(true);
                     break;
 
+                case "tts_chunk":
+                    // 流式 TTS 分句文本（可用于字幕显示，音频在后续二进制块中）
+                    var chunkText = root.TryGetProperty("text", out var ct) ? ct.GetString() ?? "" : "";
+                    var index = root.TryGetProperty("index", out var ci) ? ci.GetInt32() : -1;
+                    Logger.Info($"SpeechClient tts_chunk[{index}]: {chunkText[..Math.Min(chunkText.Length, 60)]}");
+                    break;
+
+                case "pong":
+                    Logger.Info("SpeechClient pong received");
+                    break;
+
                 case "error":
                     var msg = root.TryGetProperty("message", out var m) ? m.GetString() ?? "未知错误" : "未知错误";
                     Logger.Error($"SpeechClient server error: {msg}");

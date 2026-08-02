@@ -23,7 +23,8 @@ public class SpeechService : IDisposable
     private readonly AudioCaptureService _capture = new();
     private readonly AudioPlayer _player = new();
     private SpeechClient? _client;
-    private readonly MemoryStream _mp3Buffer = new();
+    private readonly Queue<byte[]> _playQueue = new();
+    private bool _audioEnded;
     private SpeechState _state = SpeechState.Disabled;
     private bool _disposed;
     private bool _intentionalDisconnect;
@@ -97,7 +98,7 @@ public class SpeechService : IDisposable
         _keyboard.Uninstall();
         _capture.Stop();
         _player.Stop();
-        _mp3Buffer.SetLength(0);
+        ClearPlayQueue();
         DisconnectClient();
         _overlay?.Hide();
         _overlay?.Close();
@@ -134,13 +135,13 @@ public class SpeechService : IDisposable
                 _intentionalDisconnect = true;
                 _player.Stop();
                 DisconnectClient();
-                _mp3Buffer.SetLength(0);
+                ClearPlayQueue();
                 SetState(SpeechState.Listening);
             }
 
             if (_state != SpeechState.Listening) return;
 
-            _mp3Buffer.SetLength(0);
+            ClearPlayQueue();
 
             // 连接语音服务器
             var url = ConfigService.GetSpeechServerUrl();
@@ -281,19 +282,30 @@ public class SpeechService : IDisposable
 
         client.OnMp3Data += data =>
         {
-            // 在 WebSocket 接收线程，写入缓冲区需要线程安全
-            lock (_mp3Buffer)
+            // 在 WebSocket 接收线程，切到 UI 线程入队并调度播放（边收边播，不等 audio_end）
+            Application.Current?.Dispatcher.Invoke(() =>
             {
-                _mp3Buffer.Write(data, 0, data.Length);
-            }
-            Logger.Info($"SpeechClient mp3 chunk received: {data.Length} bytes, total={_mp3Buffer.Length}");
+                _playQueue.Enqueue(data);
+                Logger.Info($"SpeechClient mp3 chunk queued: {data.Length} bytes, queue={_playQueue.Count}");
+                // 空闲则立即开始播
+                if ((_state == SpeechState.Waiting || _state == SpeechState.Playing) && !_player.IsPlaying)
+                    PlayNextChunk();
+            });
         };
 
         client.OnAudioEnd += () =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
-                PlayMp3Reply();
+                // audio_end 语义：所有分句已下发完毕（不是音频已全部到达）
+                _audioEnded = true;
+                Logger.Info($"SpeechService audio_end received, queue={_playQueue.Count}");
+                // 若队列已空且无播放，直接结束本轮
+                if (_playQueue.Count == 0 && !_player.IsPlaying)
+                {
+                    DisconnectClient();
+                    SetState(SpeechState.Listening);
+                }
             });
         };
 
@@ -302,8 +314,10 @@ public class SpeechService : IDisposable
             Application.Current?.Dispatcher.Invoke(() =>
             {
                 OnStatusMessage?.Invoke($"语音错误: {msg}");
-                if (_state == SpeechState.Waiting || _state == SpeechState.Recording)
+                if (_state == SpeechState.Waiting || _state == SpeechState.Recording || _state == SpeechState.Playing)
                 {
+                    _player.Stop();
+                    ClearPlayQueue();
                     DisconnectClient();
                     SetState(SpeechState.Listening);
                 }
@@ -314,42 +328,54 @@ public class SpeechService : IDisposable
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
-                if (_state == SpeechState.Waiting)
+                if (_state == SpeechState.Waiting || _state == SpeechState.Playing)
                 {
+                    _player.Stop();
+                    ClearPlayQueue();
                     OnStatusMessage?.Invoke("语音连接已断开");
+                    DisconnectClient();
                     SetState(SpeechState.Listening);
                 }
             });
         };
     }
 
-    private void PlayMp3Reply()
+    /// <summary>播放下一个音频块（队列空且收到 audio_end 则结束本轮）</summary>
+    private void PlayNextChunk()
     {
-        byte[] mp3Data;
-        lock (_mp3Buffer)
+        if (_playQueue.Count == 0)
         {
-            if (_mp3Buffer.Length == 0)
+            // 队列空：若已收到 audio_end（所有分句已下发），结束本轮
+            if (_audioEnded)
             {
-                // 没有音频数据，直接回到 Listening
                 DisconnectClient();
                 SetState(SpeechState.Listening);
-                return;
+                Logger.Info("SpeechService playback queue drained, back to listening");
             }
-            mp3Data = _mp3Buffer.ToArray();
-            _mp3Buffer.SetLength(0);
+            return;
         }
 
-        SetState(SpeechState.Playing);
-        _player.PlayMp3(mp3Data);
+        var chunk = _playQueue.Dequeue();
+        if (_state != SpeechState.Playing)
+            SetState(SpeechState.Playing);
+        _player.PlayMp3(chunk);
+        Logger.Info($"SpeechService playing chunk, remaining={_playQueue.Count}");
+    }
+
+    /// <summary>清空播放队列并重置 audio_end 标记</summary>
+    private void ClearPlayQueue()
+    {
+        _playQueue.Clear();
+        _audioEnded = false;
     }
 
     private void OnPlaybackCompleted()
     {
         Application.Current?.Dispatcher.Invoke(() =>
         {
-            DisconnectClient();
-            SetState(SpeechState.Listening);
-            Logger.Info("SpeechService playback completed, back to listening");
+            // 当前块播完，继续播队列中的下一块（边收边播）
+            PlayNextChunk();
+            Logger.Info("SpeechService chunk playback completed");
         });
     }
 
@@ -358,6 +384,7 @@ public class SpeechService : IDisposable
         Application.Current?.Dispatcher.Invoke(() =>
         {
             OnStatusMessage?.Invoke(msg);
+            ClearPlayQueue();
             DisconnectClient();
             SetState(SpeechState.Listening);
         });
@@ -409,7 +436,7 @@ public class SpeechService : IDisposable
         _keyboard.Dispose();
         _capture.Dispose();
         _player.Dispose();
-        _mp3Buffer.Dispose();
+        _playQueue.Clear();
         GC.SuppressFinalize(this);
     }
 
