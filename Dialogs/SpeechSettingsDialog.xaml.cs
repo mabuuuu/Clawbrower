@@ -52,6 +52,8 @@ public partial class SpeechSettingsDialog : Window
 
     private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        // XAML 加载期间 Minimum/Maximum 应用会触发 ValueChanged，ThresholdValue 尚未创建（null 防护）
+        if (ThresholdValue == null) return;
         ThresholdValue.Text = e.NewValue.ToString("F2");
     }
 
