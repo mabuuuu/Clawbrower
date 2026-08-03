@@ -45,6 +45,8 @@ public partial class SpeechSettingsDialog : Window
 
     private void UpdateWakeWordVisibility(int modeIndex)
     {
+        // XAML 加载期间 SelectionChanged 可能提前触发（null 防护）
+        if (WakeWordPanel == null) return;
         WakeWordPanel.Visibility = modeIndex == (int)SpeechMode.WakeWord ? Visibility.Visible : Visibility.Collapsed;
     }
 
