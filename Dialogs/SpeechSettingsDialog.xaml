@@ -24,10 +24,28 @@
 
             <!-- 语音模式 -->
             <TextBlock Text="语音模式" FontSize="12" Foreground="#99EEEEEE" Margin="0,0,0,6"/>
-            <ComboBox x:Name="ModeCombo" SelectedIndex="0">
+            <ComboBox x:Name="ModeCombo" SelectedIndex="0" SelectionChanged="ModeCombo_SelectionChanged">
                 <ComboBoxItem Content="按住说话 (PTT)" />
-                <ComboBoxItem Content="唤醒词模式（敬请期待）" IsEnabled="False" />
+                <ComboBoxItem Content="唤醒词模式（说"二七二七"自动对话）" />
             </ComboBox>
+
+            <!-- 唤醒词配置区 -->
+            <StackPanel x:Name="WakeWordPanel" Visibility="Collapsed" Margin="0,12,0,0">
+                <TextBlock Text="唤醒词：二七二七（本地 ONNX 检测，模型随程序分发）" FontSize="11"
+                           Foreground="#88EEEEEE" TextWrapping="Wrap"/>
+                <TextBlock Text="触发阈值" FontSize="12" Foreground="#99EEEEEE" Margin="0,12,0,6"/>
+                <StackPanel Orientation="Horizontal">
+                    <Slider x:Name="ThresholdSlider" Minimum="0.1" Maximum="0.9" TickFrequency="0.05"
+                            IsSnapToTickEnabled="True" Width="200" VerticalAlignment="Center"
+                            ValueChanged="ThresholdSlider_ValueChanged"/>
+                    <TextBlock x:Name="ThresholdValue" Text="0.50" FontSize="12" Foreground="#88EEEEEE"
+                               Margin="12,0,0,0" VerticalAlignment="Center" Width="50"/>
+                </StackPanel>
+                <TextBlock Text="阈值越低越灵敏（易误报），越高越保守（可能漏报）。建议 0.5。" FontSize="11"
+                           Foreground="#88678CB3" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                <TextBlock Text="检测到唤醒词后自动开始录音对话，说完停顿约 2 秒自动结束并发送。" FontSize="11"
+                           Foreground="#88678CB3" Margin="0,6,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
 
             <!-- PTT 按键 -->
             <TextBlock Text="PTT 按键（点击下方框，按下你想要的键）" FontSize="12"

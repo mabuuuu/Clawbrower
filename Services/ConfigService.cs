@@ -207,7 +207,7 @@ public class McpConfig
 public enum SpeechMode
 {
     PTT = 0,           // 按住说话
-    WakeWord = 1,      // 唤醒词（暂未实现，预留入口）
+    WakeWord = 1,      // 唤醒词（说"二七二七"自动开始对话）
 }
 
 public class SpeechConfig
@@ -223,6 +223,12 @@ public class SpeechConfig
 
     /// <summary>语音服务器 WebSocket 地址（如 ws://host:9529/speech）。默认为空，首次连接时弹窗填写。</summary>
     public string? ServerUrl { get; set; }
+
+    /// <summary>唤醒词触发阈值（0~1，默认 0.5，可调 0.1~0.9）</summary>
+    public double WakeWordThreshold { get; set; } = 0.5;
+
+    /// <summary>唤醒词检测器启动/重置后的冷却时间（秒），期间不触发（覆盖初始化窗口期误报）</summary>
+    public double WakeWordCooldown { get; set; } = 2.5;
 
     /// <summary>是否已完成首次配置</summary>
     public bool IsConfigured { get; set; } = false;

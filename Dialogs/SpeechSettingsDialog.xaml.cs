@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using Clawbrower.Services;
 using SpeechMode = Clawbrower.Services.SpeechMode;
@@ -21,6 +22,8 @@ public partial class SpeechSettingsDialog : Window
         Config = cfg;
 
         ModeCombo.SelectedIndex = (int)cfg.Mode;
+        ThresholdSlider.Value = cfg.WakeWordThreshold;
+        UpdateWakeWordVisibility((int)cfg.Mode);
 
         // 从 VK 转回 Key 显示
         _capturedKey = KeyInterop.KeyFromVirtualKey(cfg.PttVirtualKey);
@@ -33,6 +36,21 @@ public partial class SpeechSettingsDialog : Window
     {
         var dlg = new SpeechSettingsDialog(existing) { Owner = owner };
         return dlg.ShowDialog() == true ? dlg.Config : null;
+    }
+
+    private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateWakeWordVisibility(ModeCombo.SelectedIndex);
+    }
+
+    private void UpdateWakeWordVisibility(int modeIndex)
+    {
+        WakeWordPanel.Visibility = modeIndex == (int)SpeechMode.WakeWord ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        ThresholdValue.Text = e.NewValue.ToString("F2");
     }
 
     private void PttKeyBox_GotFocus(object sender, RoutedEventArgs e)
@@ -91,6 +109,7 @@ public partial class SpeechSettingsDialog : Window
     {
         Config.Mode = (SpeechMode)ModeCombo.SelectedIndex;
         Config.PttVirtualKey = KeyInterop.VirtualKeyFromKey(_capturedKey);
+        Config.WakeWordThreshold = Math.Round(ThresholdSlider.Value, 2);
         Config.IsConfigured = true;
 
         DialogResult = true;

@@ -287,7 +287,7 @@ public partial class App : System.Windows.Application
                 cfg.IsConfigured = true;
             }
             ConfigService.SetSpeechConfig(cfg);
-            SpeechService.Enable(cfg.PttVirtualKey);
+            SpeechService.Enable(cfg.PttVirtualKey, cfg.Mode, cfg.WakeWordThreshold, cfg.WakeWordCooldown);
         });
     }
 

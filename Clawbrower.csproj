@@ -14,11 +14,13 @@
 
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.28.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="mcp\**" CopyToOutputDirectory="PreserveNewest" Link="mcp\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="wakeword\**" CopyToOutputDirectory="PreserveNewest" Link="wakeword\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

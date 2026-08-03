@@ -67,6 +67,10 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
     // ── 语音 PTT 按键 ──
     private Key _capturedPttKey = Key.F12;
 
+    // ── 语音原始值（模式/阈值变更需重启语音服务）──
+    private readonly SpeechMode _origSpeechMode;
+    private readonly double _origSpeechThreshold;
+
     public SettingsWindow(MainWindow mainWindow)
     {
         _mainWindow = mainWindow;
@@ -78,6 +82,11 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         _origTextColor = s.TextColor;
         _origHotkeyMod = s.HotkeyMod;
         _origHotkeyKey = s.HotkeyKey;
+
+        // 语音原始值
+        var origSpeech = ConfigService.GetSpeechConfig();
+        _origSpeechMode = origSpeech.Mode;
+        _origSpeechThreshold = origSpeech.WakeWordThreshold;
 
         _windowOpacity = s.Opacity;
         _textOpacity = s.TextOpacity;
@@ -99,6 +108,8 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         // 语音
         var speechCfg = ConfigService.GetSpeechConfig();
         ModeCombo.SelectedIndex = (int)speechCfg.Mode;
+        ThresholdSlider.Value = speechCfg.WakeWordThreshold;
+        UpdateWakeWordVisibility((int)speechCfg.Mode);
         _capturedPttKey = KeyInterop.KeyFromVirtualKey(speechCfg.PttVirtualKey);
         UpdatePttKeyDisplay();
         SpeechServerUrl.Text = speechCfg.ServerUrl ?? "";
@@ -200,6 +211,22 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         PttHint.Text = $"当前按键: {keyName}（VK=0x{KeyInterop.VirtualKeyFromKey(_capturedPttKey):X2}）";
     }
 
+    // ════════ 语音：唤醒词配置区 ════════
+    private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateWakeWordVisibility(ModeCombo.SelectedIndex);
+    }
+
+    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        ThresholdValue.Text = e.NewValue.ToString("F2");
+    }
+
+    private void UpdateWakeWordVisibility(int modeIndex)
+    {
+        WakeWordPanel.Visibility = modeIndex == (int)SpeechMode.WakeWord ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     // ════════ 确认：保存所有设置 ════════
     private void ConfirmButton_Click(object sender, RoutedEventArgs e)
     {
@@ -232,11 +259,15 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         var speechCfg = ConfigService.GetSpeechConfig();
         var newPttVk = KeyInterop.VirtualKeyFromKey(_capturedPttKey);
         var newServerUrl = string.IsNullOrWhiteSpace(SpeechServerUrl.Text) ? null : SpeechServerUrl.Text.Trim();
+        var newMode = (SpeechMode)ModeCombo.SelectedIndex;
+        var newThreshold = Math.Round(ThresholdSlider.Value, 2);
         var speechChanged = speechCfg.PttVirtualKey != newPttVk
-                            || speechCfg.Mode != (SpeechMode)ModeCombo.SelectedIndex
+                            || speechCfg.Mode != newMode
+                            || speechCfg.WakeWordThreshold != newThreshold
                             || speechCfg.ServerUrl != newServerUrl;
-        speechCfg.Mode = (SpeechMode)ModeCombo.SelectedIndex;
+        speechCfg.Mode = newMode;
         speechCfg.PttVirtualKey = newPttVk;
+        speechCfg.WakeWordThreshold = newThreshold;
         speechCfg.ServerUrl = newServerUrl;
         speechCfg.IsConfigured = true;
         c.Speech = speechCfg;
@@ -247,9 +278,19 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         if (connectionChanged)
             _ = _mainWindow.Reconnect();
 
-        // 语音变更 -> 更新 PTT 按键
+        // 语音变更：模式/阈值变化需要重启语音服务应用；仅 PTT 键变化则热更新
         if (speechChanged && App.SpeechService.IsEnabled)
-            App.SpeechService.UpdatePttKey(newPttVk);
+        {
+            if (speechCfg.Mode != _origSpeechMode || speechCfg.WakeWordThreshold != _origSpeechThreshold)
+            {
+                App.SpeechService.Disable();
+                App.SpeechService.Enable(newPttVk, newMode, newThreshold, speechCfg.WakeWordCooldown);
+            }
+            else
+            {
+                App.SpeechService.UpdatePttKey(newPttVk);
+            }
+        }
 
         DialogResult = true;
         Close();
