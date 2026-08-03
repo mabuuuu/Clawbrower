@@ -205,7 +205,7 @@
                         <TextBlock Text="语音模式" FontSize="12" Foreground="#99EEEEEE" Margin="0,0,0,6"/>
                         <ComboBox x:Name="ModeCombo" SelectedIndex="0" SelectionChanged="ModeCombo_SelectionChanged">
                             <ComboBoxItem Content="按住说话 (PTT)"/>
-                            <ComboBoxItem Content="唤醒词模式（说"二七二七"自动对话）"/>
+                            <ComboBoxItem Content="唤醒词模式（说「二七二七」自动对话）"/>
                         </ComboBox>
 
                         <!-- 唤醒词配置区 -->
