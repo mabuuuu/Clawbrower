@@ -118,7 +118,8 @@ public class McpService : IDisposable
         sb.AppendLine($"auth.token = \"{cfg.FrpAuthToken}\"");
         sb.AppendLine();
         sb.AppendLine("[[proxies]]");
-        sb.AppendLine("name = \"mcp\"");
+        var proxyName = string.IsNullOrWhiteSpace(cfg.DeviceName) ? "mcp" : cfg.DeviceName;
+        sb.AppendLine($"name = \"{proxyName}\"");
         sb.AppendLine("type = \"tcp\"");
         sb.AppendLine("localIP = \"127.0.0.1\"");
         sb.AppendLine($"localPort = {cfg.LocalPort}");
