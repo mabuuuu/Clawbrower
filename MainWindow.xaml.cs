@@ -62,6 +62,7 @@ public partial class MainWindow : Window
 
         // 窗口缩放时，通知所有 MarkdownBlock 按新可用宽度重新布局（处理放大时不恢复的 bug）
         // 用 DispatcherTimer 节流：拖动中只重置定时器，停止 ~120ms 后才遍历渲染一次，避免每帧全量重渲染卡顿
+        // 注：MarkdownBlock 已改为 TextBlock 自绘（自适应宽度），不再需要手动重渲染，此逻辑已空转保留
         _resizeTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(120)

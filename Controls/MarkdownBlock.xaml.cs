@@ -1,5 +1,4 @@
-using System.Globalization;
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -10,7 +9,6 @@ using WpfColor = System.Windows.Media.Color;
 using WpfBrush = System.Windows.Media.SolidColorBrush;
 using WpfFontStyle = System.Windows.FontStyle;
 using WpfFontFamily = System.Windows.Media.FontFamily;
-using FlowDocumentScrollViewer = System.Windows.Controls.FlowDocumentScrollViewer;
 
 namespace Clawbrower.Controls;
 
@@ -37,72 +35,17 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     }
 
     private TextBlock? _streamingBlock;
-    private double _lastPageWidth;
-    private double _lastContentWidth;
 
     public MarkdownBlock()
     {
         InitializeComponent();
-        SizeChanged += OnSizeChanged;
-    }
-
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        if (e.NewSize.Width <= 0) return;
-        TryRerender();
     }
 
     /// <summary>
-    /// 由外部容器（如 MainWindow 监听 ScrollViewer.SizeChanged）在窗口缩放时调用，
-    /// 触发气泡按新的可用宽度重新布局。内部会用"pageWidth 是否会变"做闸门，避免无谓重渲染。
+    /// 兼容旧接口：窗口缩放时 TextBlock 会自动重排，无需手动重渲染。
     /// </summary>
-    public void InvalidateLayout() => TryRerender();
-
-    private void TryRerender()
+    public void InvalidateLayout()
     {
-        if (_streamingBlock != null) return;
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (_streamingBlock != null) return;
-            var newAvailable = ComputeAvailableWidth();
-            var newPageWidth = _lastContentWidth > 0
-                ? Math.Min(_lastContentWidth + 24, newAvailable)
-                : newAvailable;
-            if (Math.Abs(newPageWidth - _lastPageWidth) < 0.5) return;
-            RenderMarkdown(MarkdownText);
-        }, System.Windows.Threading.DispatcherPriority.Background);
-    }
-
-    /// <summary>
-    /// 计算当前气泡可用的内容宽度：取 ScrollViewer 的 ViewportWidth 与最近的 Border.MaxWidth 的较小值，
-    /// 减去 Border 的横向 Padding。MarkdownBlock 自身的 ActualWidth 因 PageWidth 被显式设置而无法反映
-    /// 父容器放大后的真实可用宽度，因此必须向上遍历可视树读取。
-    /// </summary>
-    private double ComputeAvailableWidth()
-    {
-        double viewport = 0;
-        double maxW = double.PositiveInfinity;
-        double padX = 0;
-        bool borderFound = false;
-        DependencyObject? p = VisualTreeHelper.GetParent(this);
-        while (p != null)
-        {
-            if (!borderFound && p is Border b)
-            {
-                maxW = b.MaxWidth;
-                padX = b.Padding.Left + b.Padding.Right;
-                borderFound = true;
-            }
-            if (p is ScrollViewer sv && sv.ViewportWidth > 0)
-            {
-                viewport = sv.ViewportWidth;
-                break;
-            }
-            p = VisualTreeHelper.GetParent(p);
-        }
-        if (viewport <= 0) return ActualWidth > 1 ? ActualWidth : 320;
-        var avail = Math.Min(maxW, viewport) - padX;
-        return avail > 40 ? avail : (ActualWidth > 1 ? ActualWidth : 320);
     }
 
     private static void OnMarkdownTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -112,7 +55,12 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         {
             if (control._streamingBlock == null)
             {
-                control._streamingBlock = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+                control._streamingBlock = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 13,
+                    FontFamily = new WpfFontFamily("Microsoft YaHei UI")
+                };
                 control.ContentRoot.Children.Clear();
                 control.ContentRoot.Children.Add(control._streamingBlock);
             }
@@ -136,27 +84,14 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         ContentRoot.Children.Clear();
         _streamingBlock = null;
 
-        // Sanitize BEFORE anything touches FlowDocument — broken surrogates cause FailFast crash
+        // Sanitize BEFORE any text enters TextBlock — broken surrogates crash WPF
         markdown = MarkdownParser.SanitizeSurrogates(markdown);
 
-        // Calculate page width from content: tight for short text, capped at available space
-        var availableWidth = ComputeAvailableWidth();
-        var contentWidth = EstimateContentWidth(markdown);
-        _lastContentWidth = contentWidth;
-        var pageWidth = contentWidth > 0
-            ? Math.Min(contentWidth + 24, availableWidth)
-            : availableWidth;
-        _lastPageWidth = pageWidth;
-
-        var doc = new FlowDocument
-        {
-            FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
-            FontSize = 13,
-            PagePadding = new Thickness(0),
-            PageWidth = pageWidth,
-            ColumnWidth = double.PositiveInfinity
-        };
-
+        // 不使用 FlowDocument/FlowDocumentScrollViewer：其 PTS 段落布局在有限高度
+        // ScrollViewer 内多文档渲染时触发 UpdateViewport 无限递归（WPF 布局循环检测 →
+        // Environment.FailFast 崩溃，加载历史消息时复现）。
+        // 全部改用普通 UI 元素（TextBlock/Grid/StackPanel），走 UIElement 布局管线，
+        // 宽度自适应 Border 约束，无 PTS、无布局循环风险。
         var blocks = MarkdownParser.ParseBlocks(markdown);
         foreach (var block in blocks)
         {
@@ -165,35 +100,36 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 switch (block)
                 {
                     case MdParagraph p:
-                        doc.Blocks.Add(CreateFlowParagraph(p.Inlines, 13, FontWeights.Normal, FontStyles.Normal,
-                            new Thickness(0, 2, 0, 2)));
+                        ContentRoot.Children.Add(CreateTextBlock(p.Inlines, 13,
+                            FontWeights.Normal, FontStyles.Normal, new Thickness(0, 2, 0, 2)));
                         break;
 
                     case MdHeader h:
                         var hSize = h.Level switch { 1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0 };
-                        doc.Blocks.Add(CreateFlowParagraph(
+                        ContentRoot.Children.Add(CreateTextBlock(
                             MarkdownParser.ParseInlineLine(h.Text), hSize, FontWeights.Bold, FontStyles.Normal,
                             new Thickness(0, 6, 0, 2)));
                         break;
 
                     case MdTable t:
-                        doc.Blocks.Add(CreateFlowTable(t));
+                        ContentRoot.Children.Add(CreateFlowTable(t));
                         break;
 
                     case MdList l:
-                        doc.Blocks.Add(CreateFlowList(l));
+                        ContentRoot.Children.Add(CreateFlowList(l));
                         break;
 
                     case MdQuote q:
-                        doc.Blocks.Add(CreateFlowQuote(q));
+                        ContentRoot.Children.Add(CreateFlowQuote(q));
                         break;
 
                     case MdDivider:
-                        doc.Blocks.Add(new BlockUIContainer(new Border
+                        ContentRoot.Children.Add(new Border
                         {
-                            Height = 1, Margin = new Thickness(0, 6, 0, 6),
+                            Height = 1,
+                            Margin = new Thickness(0, 6, 0, 6),
                             Background = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55))
-                        }));
+                        });
                         break;
                 }
             }
@@ -202,189 +138,137 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 Logger.Error($"RenderMarkdown block failed: {ex.Message}");
             }
         }
-
-        var viewer = new FlowDocumentScrollViewer
-        {
-            Document = doc,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            IsToolBarVisible = false,
-            Background = System.Windows.Media.Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Padding = new Thickness(0),
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Left
-        };
-        viewer.PreviewMouseWheel += OnViewerPreviewMouseWheel;
-
-        ContentRoot.Children.Add(viewer);
     }
 
-    private static void OnViewerPreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        if (sender is not DependencyObject d) return;
-        DependencyObject? p = VisualTreeHelper.GetParent(d);
-        while (p != null)
-        {
-            if (p is ScrollViewer sv)
-            {
-                e.Handled = true;
-                var args = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
-                {
-                    RoutedEvent = UIElement.MouseWheelEvent
-                };
-                sv.RaiseEvent(args);
-                return;
-            }
-            p = VisualTreeHelper.GetParent(p);
-        }
-    }
-
-    private static double EstimateContentWidth(string markdown)
-    {
-        if (string.IsNullOrEmpty(markdown)) return 0;
-        double maxWidth = 0;
-        var typeface = new Typeface("Microsoft YaHei UI");
-        const double dpi = 1.0;
-
-        foreach (var raw in markdown.Split('\n'))
-        {
-            var line = raw.Trim();
-            if (string.IsNullOrEmpty(line)) continue;
-            // Skip table separators
-            if (line.All(c => c == '|' || c == '-' || c == ':' || c == ' ')) continue;
-
-            var match = System.Text.RegularExpressions.Regex.Match(line, @"^(#{1,6})\s+");
-            double fontSize = match.Success ? match.Groups[1].Length switch
-            {
-                1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0
-            } : 13.0;
-
-            var text = MarkdownParser.StripInlineMarkdown(line);
-            if (string.IsNullOrEmpty(text)) continue;
-
-            var ft = new FormattedText(text, CultureInfo.CurrentCulture,
-                System.Windows.FlowDirection.LeftToRight, typeface, fontSize, System.Windows.Media.Brushes.Black, dpi);
-            if (ft.Width > maxWidth) maxWidth = ft.Width;
-        }
-        return Math.Min(maxWidth, 320);
-    }
-
-    // ── FlowDocument helpers ──
-
-    private static Paragraph CreateFlowParagraph(
+    private static TextBlock CreateTextBlock(
         IEnumerable<Inline> inlines, double fontSize, FontWeight weight, WpfFontStyle style, Thickness margin)
     {
-        var p = new Paragraph
+        var tb = new TextBlock
         {
+            FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
             FontSize = fontSize,
             FontWeight = weight,
             FontStyle = style,
-            Margin = margin
+            Margin = margin,
+            TextWrapping = TextWrapping.Wrap
         };
         foreach (var inline in inlines)
-            p.Inlines.Add(inline);
-        return p;
+            tb.Inlines.Add(inline);
+        return tb;
     }
 
-    private static Table CreateFlowTable(MdTable mdTable)
+    private static Grid CreateFlowTable(MdTable mdTable)
     {
-        var table = new Table { Margin = new Thickness(0, 4, 0, 4) };
-        var colCount = mdTable.Headers.Count;
+        // 表格用 Grid 自绘（不用 WPF Table：单元格走 PTS 段落布局，触发布局循环崩溃）
+        var colCount = Math.Max(mdTable.Headers.Count, mdTable.Rows.Count > 0 ? mdTable.Rows.Max(r => r.Count) : 0);
+        if (colCount <= 0) colCount = 1;
 
+        var grid = new Grid { Margin = new Thickness(0, 4, 0, 4) };
         for (int c = 0; c < colCount; c++)
-            table.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var rowGroup = new TableRowGroup();
+        int row = 0;
 
         // Header row
-        var headerRow = new TableRow();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         for (int c = 0; c < colCount; c++)
         {
-            var cell = new TableCell(new Paragraph(new Run(MarkdownParser.StripInlineMarkdown(mdTable.Headers[c])))
-            {
-                FontSize = 12,
-                FontWeight = FontWeights.Bold
-            })
+            var headerText = c < mdTable.Headers.Count ? mdTable.Headers[c] : "";
+            var cell = new Border
             {
                 Background = new WpfBrush(WpfColor.FromRgb(0x2A, 0x2A, 0x3A)),
                 BorderBrush = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55)),
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                Padding = new Thickness(6, 3, 6, 3)
+                Padding = new Thickness(6, 3, 6, 3),
+                Child = new TextBlock
+                {
+                    Text = MarkdownParser.StripInlineMarkdown(headerText),
+                    FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                    FontSize = 12,
+                    FontWeight = FontWeights.Bold,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = new WpfBrush(WpfColor.FromRgb(0xEE, 0xEE, 0xEE))
+                }
             };
-            ApplyCellAlign(cell, mdTable.Alignments.Count > c ? mdTable.Alignments[c] : null);
-            headerRow.Cells.Add(cell);
+            Grid.SetRow(cell, row);
+            Grid.SetColumn(cell, c);
+            grid.Children.Add(cell);
         }
-        rowGroup.Rows.Add(headerRow);
+        row++;
 
         // Data rows
-        foreach (var row in mdTable.Rows)
+        foreach (var dataRow in mdTable.Rows)
         {
-            var tableRow = new TableRow();
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             for (int c = 0; c < colCount; c++)
             {
-                var text = c < row.Count ? row[c] : "";
-                var align = mdTable.Alignments.Count > c ? mdTable.Alignments[c] : null;
-                var cell = new TableCell(new Paragraph(new Run(MarkdownParser.StripInlineMarkdown(text)))
-                {
-                    FontSize = 12
-                })
+                var text = c < dataRow.Count ? dataRow[c] : "";
+                var cell = new Border
                 {
                     BorderBrush = new WpfBrush(WpfColor.FromRgb(0x33, 0x33, 0x44)),
                     BorderThickness = new Thickness(0.5),
-                    Padding = new Thickness(6, 3, 6, 3)
+                    Padding = new Thickness(6, 3, 6, 3),
+                    Child = new TextBlock
+                    {
+                        Text = MarkdownParser.StripInlineMarkdown(text),
+                        FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                        FontSize = 12,
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = new WpfBrush(WpfColor.FromRgb(0xDD, 0xDD, 0xDD))
+                    }
                 };
-                ApplyCellAlign(cell, align);
-                tableRow.Cells.Add(cell);
+                Grid.SetRow(cell, row);
+                Grid.SetColumn(cell, c);
+                grid.Children.Add(cell);
             }
-            rowGroup.Rows.Add(tableRow);
+            row++;
         }
 
-        table.RowGroups.Add(rowGroup);
-        return table;
+        return grid;
     }
 
-    private static void ApplyCellAlign(TableCell cell, string? alignment)
+    private static StackPanel CreateFlowList(MdList l)
     {
-        cell.TextAlignment = alignment switch
-        {
-            "center" => TextAlignment.Center,
-            "right" => TextAlignment.Right,
-            _ => TextAlignment.Left
-        };
-    }
-
-    private static List CreateFlowList(MdList l)
-    {
-        var list = new List
-        {
-            MarkerStyle = l.Ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
-            Margin = new Thickness(0, 2, 0, 2)
-        };
+        // 列表用 StackPanel 自绘（不用 WPF List：ListItem → Paragraph 走 PTS 容器布局）
+        var stack = new StackPanel { Margin = new Thickness(0, 2, 0, 2) };
+        var number = 1;
         foreach (var item in l.Items)
         {
-            var listItem = new ListItem();
-            var para = new Paragraph { Margin = new Thickness(0) };
+            var row = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            var marker = l.Ordered ? $"{number}. " : "•  ";
+            row.Children.Add(new TextBlock
+            {
+                Text = marker,
+                FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                FontSize = 13,
+                Foreground = new WpfBrush(WpfColor.FromRgb(0x88, 0x88, 0xAA)),
+                Margin = new Thickness(0, 0, 2, 0)
+            });
+            var content = new TextBlock
+            {
+                FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                FontSize = 13,
+                TextWrapping = TextWrapping.Wrap
+            };
             foreach (var inline in MarkdownParser.ParseInlineLine(item))
-                para.Inlines.Add(inline);
-            listItem.Blocks.Add(para);
-            list.ListItems.Add(listItem);
+                content.Inlines.Add(inline);
+            row.Children.Add(content);
+            stack.Children.Add(row);
+            number++;
         }
-        return list;
+        return stack;
     }
 
-    private static Paragraph CreateFlowQuote(MdQuote q)
+    private static Border CreateFlowQuote(MdQuote q)
     {
-        var p = new Paragraph
+        return new Border
         {
-            FontStyle = FontStyles.Italic,
-            Foreground = new WpfBrush(WpfColor.FromRgb(0xBB, 0xBB, 0xCC)),
             BorderBrush = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)),
             BorderThickness = new Thickness(4, 0, 0, 0),
             Padding = new Thickness(8, 0, 0, 0),
-            Margin = new Thickness(0, 2, 0, 2)
+            Margin = new Thickness(0, 2, 0, 2),
+            Child = CreateTextBlock(MarkdownParser.ParseInlineLine(q.Text), 13,
+                FontWeights.Normal, FontStyles.Italic, new Thickness(0))
         };
-        foreach (var inline in MarkdownParser.ParseInlineLine(q.Text))
-            p.Inlines.Add(inline);
-        return p;
     }
 }
