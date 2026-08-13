@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Clawbrower.Models;
 using Clawbrower.Services;
 using WpfColor = System.Windows.Media.Color;
@@ -14,6 +15,16 @@ namespace Clawbrower.Controls;
 
 public partial class MarkdownBlock : System.Windows.Controls.UserControl
 {
+    // ── 静态缓存：渲染热路径中的重复对象（FontFamily 字符串解析、Brush 创建都很昂贵）──
+    private static readonly WpfFontFamily YaHeiFont = new("Microsoft YaHei UI");
+    private static readonly WpfBrush HeaderBgBrush = new(WpfColor.FromRgb(0x2A, 0x2A, 0x3A));
+    private static readonly WpfBrush CellBorderBrush = new(WpfColor.FromRgb(0x33, 0x33, 0x44));
+    private static readonly WpfBrush GridLineBrush = new(WpfColor.FromRgb(0x44, 0x44, 0x55));
+    private static readonly WpfBrush HeaderFgBrush = new(WpfColor.FromRgb(0xEE, 0xEE, 0xEE));
+    private static readonly WpfBrush CellFgBrush = new(WpfColor.FromRgb(0xDD, 0xDD, 0xDD));
+    private static readonly WpfBrush ListMarkerBrush = new(WpfColor.FromRgb(0x88, 0x88, 0xAA));
+    private static readonly WpfBrush QuoteBorderBrush = new(WpfColor.FromRgb(0x55, 0x77, 0xAA));
+
     public static readonly DependencyProperty MarkdownTextProperty =
         DependencyProperty.Register(nameof(MarkdownText), typeof(string), typeof(MarkdownBlock),
             new PropertyMetadata("", OnMarkdownTextChanged));
@@ -35,6 +46,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     }
 
     private TextBlock? _streamingBlock;
+    private bool _updateScheduled;
 
     public MarkdownBlock()
     {
@@ -50,41 +62,55 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
     private static void OnMarkdownTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        var control = (MarkdownBlock)d;
-        if (control.IsStreaming)
-        {
-            if (control._streamingBlock == null)
-            {
-                control._streamingBlock = new TextBlock
-                {
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 13,
-                    FontFamily = new WpfFontFamily("Microsoft YaHei UI")
-                };
-                control.ContentRoot.Children.Clear();
-                control.ContentRoot.Children.Add(control._streamingBlock);
-            }
-            var text = e.NewValue as string ?? "";
-            // 截断：流式时只显示最后 MaxStreamingChars 字符，避免超长 TextBlock 文字布局卡死 UI。
-            // 流式结束（IsStreaming=false）后走 RenderMarkdown 分段渲染完整内容。
-            const int MaxStreamingChars = 5000;
-            if (text.Length > MaxStreamingChars)
-            {
-                text = "…（流式中，仅显示末尾内容）\n" + text[^MaxStreamingChars..];
-            }
-            control._streamingBlock.Text = MarkdownParser.SanitizeSurrogates(text);
-        }
-        else
-        {
-            control.RenderMarkdown(e.NewValue as string ?? "");
-        }
+        // 延迟渲染：在 Dispatcher Background 优先级执行视觉树修改。
+        // 直接同步渲染会在模板加载/Measure 期间修改视觉树（Clear/Add），
+        // 导致 WPF 布局重入（模板反复加载），UI 线程卡死 + 内存暴涨。
+        ((MarkdownBlock)d).ScheduleContentUpdate();
     }
 
     private static void OnIsStreamingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        var control = (MarkdownBlock)d;
-        if ((bool)e.OldValue && !(bool)e.NewValue)
-            control.RenderMarkdown(control.MarkdownText);
+        ((MarkdownBlock)d).ScheduleContentUpdate();
+    }
+
+    /// <summary>
+    /// 调度一次内容更新（合并快速连续更新，延迟到布局完成后的 Background 优先级）。
+    /// </summary>
+    private void ScheduleContentUpdate()
+    {
+        if (_updateScheduled) return;
+        _updateScheduled = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _updateScheduled = false;
+            if (IsStreaming)
+                RenderStreaming(MarkdownText);
+            else
+                RenderMarkdown(MarkdownText);
+        }));
+    }
+
+    private void RenderStreaming(string text)
+    {
+        if (_streamingBlock == null)
+        {
+            _streamingBlock = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                FontFamily = YaHeiFont
+            };
+            ContentRoot.Children.Clear();
+            ContentRoot.Children.Add(_streamingBlock);
+        }
+        // 截断：流式时只显示最后 MaxStreamingChars 字符，避免超长 TextBlock 文字布局卡死 UI。
+        // 流式结束（IsStreaming=false）后走 RenderMarkdown 分段渲染完整内容。
+        const int MaxStreamingChars = 5000;
+        if (text.Length > MaxStreamingChars)
+        {
+            text = "…（流式中，仅显示末尾内容）\n" + text[^MaxStreamingChars..];
+        }
+        _streamingBlock.Text = MarkdownParser.SanitizeSurrogates(text);
     }
 
     private void RenderMarkdown(string markdown)
@@ -94,6 +120,16 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
         // Sanitize BEFORE any text enters TextBlock — broken surrogates crash WPF
         markdown = MarkdownParser.SanitizeSurrogates(markdown);
+
+        // 渲染上限：超过 MaxRenderChars 只渲染开头部分。
+        // 防止超长消息（数十万行）的解析+UI 对象创建卡死 UI 线程并耗尽内存。
+        const int MaxRenderChars = 30_000;
+        if (markdown.Length > MaxRenderChars)
+        {
+            var omitted = markdown.Length - MaxRenderChars;
+            markdown = markdown[..MaxRenderChars] +
+                       $"\n\n…（消息过长，已截断显示，剩余 {omitted} 字符未渲染）";
+        }
 
         // 不使用 FlowDocument/FlowDocumentScrollViewer：其 PTS 段落布局在有限高度
         // ScrollViewer 内多文档渲染时触发 UpdateViewport 无限递归（WPF 布局循环检测 →
@@ -136,7 +172,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                         {
                             Height = 1,
                             Margin = new Thickness(0, 6, 0, 6),
-                            Background = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55))
+                            Background = GridLineBrush
                         });
                         break;
                 }
@@ -153,7 +189,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     {
         var tb = new TextBlock
         {
-            FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+            FontFamily = YaHeiFont,
             FontSize = fontSize,
             FontWeight = weight,
             FontStyle = style,
@@ -184,18 +220,18 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             var headerText = c < mdTable.Headers.Count ? mdTable.Headers[c] : "";
             var cell = new Border
             {
-                Background = new WpfBrush(WpfColor.FromRgb(0x2A, 0x2A, 0x3A)),
-                BorderBrush = new WpfBrush(WpfColor.FromRgb(0x44, 0x44, 0x55)),
+                Background = HeaderBgBrush,
+                BorderBrush = GridLineBrush,
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 Padding = new Thickness(6, 3, 6, 3),
                 Child = new TextBlock
                 {
                     Text = MarkdownParser.StripInlineMarkdown(headerText),
-                    FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                    FontFamily = YaHeiFont,
                     FontSize = 12,
                     FontWeight = FontWeights.Bold,
                     TextWrapping = TextWrapping.Wrap,
-                    Foreground = new WpfBrush(WpfColor.FromRgb(0xEE, 0xEE, 0xEE))
+                    Foreground = HeaderFgBrush
                 }
             };
             Grid.SetRow(cell, row);
@@ -213,16 +249,16 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 var text = c < dataRow.Count ? dataRow[c] : "";
                 var cell = new Border
                 {
-                    BorderBrush = new WpfBrush(WpfColor.FromRgb(0x33, 0x33, 0x44)),
+                    BorderBrush = CellBorderBrush,
                     BorderThickness = new Thickness(0.5),
                     Padding = new Thickness(6, 3, 6, 3),
                     Child = new TextBlock
                     {
                         Text = MarkdownParser.StripInlineMarkdown(text),
-                        FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                        FontFamily = YaHeiFont,
                         FontSize = 12,
                         TextWrapping = TextWrapping.Wrap,
-                        Foreground = new WpfBrush(WpfColor.FromRgb(0xDD, 0xDD, 0xDD))
+                        Foreground = CellFgBrush
                     }
                 };
                 Grid.SetRow(cell, row);
@@ -247,14 +283,14 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             row.Children.Add(new TextBlock
             {
                 Text = marker,
-                FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                FontFamily = YaHeiFont,
                 FontSize = 13,
-                Foreground = new WpfBrush(WpfColor.FromRgb(0x88, 0x88, 0xAA)),
+                Foreground = ListMarkerBrush,
                 Margin = new Thickness(0, 0, 2, 0)
             });
             var content = new TextBlock
             {
-                FontFamily = new WpfFontFamily("Microsoft YaHei UI"),
+                FontFamily = YaHeiFont,
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap
             };
@@ -271,7 +307,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     {
         return new Border
         {
-            BorderBrush = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)),
+            BorderBrush = QuoteBorderBrush,
             BorderThickness = new Thickness(4, 0, 0, 0),
             Padding = new Thickness(8, 0, 0, 0),
             Margin = new Thickness(0, 2, 0, 2),

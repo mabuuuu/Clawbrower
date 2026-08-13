@@ -30,6 +30,9 @@ public class MainViewModel : INotifyPropertyChanged
     private DispatcherTimer? _deltaFlushTimer;
     private bool _deltaDirty;
 
+    /// <summary>单条消息最大字符数，超过则流式分段（新气泡继续），防止超长文本渲染卡死。</summary>
+    private const int MaxMessageChars = 20_000;
+
     // 配对轮询
     private bool _pairingPolling;
     private CancellationTokenSource? _pairingCts;
@@ -233,6 +236,27 @@ public class MainViewModel : INotifyPropertyChanged
                     var preview = text.Length > 40 ? text[..40] + "..." : text;
                     Logger.Info($"Delta[{text.Length}]: {preview.Replace("\n", "\\n")}");
                     _currentAiMessage += text;
+
+                    // 单条消息超长时分段：封存当前消息（触发有限长度渲染），新建气泡继续累积。
+                    // 与历史加载的多气泡行为一致，避免单气泡超长文本导致 RenderMarkdown 卡死/内存爆炸。
+                    if (_currentAiMessage.Length > MaxMessageChars)
+                    {
+                        var curAi = FindLastAssistantMessage();
+                        if (curAi != null)
+                        {
+                            curAi.Content = _currentAiMessage;
+                            curAi.IsStreaming = false;
+                        }
+                        _currentAiMessage = "";
+                        Messages.Add(new ChatMessage
+                        {
+                            Role = ChatRole.Assistant,
+                            Content = "",
+                            IsStreaming = true
+                        });
+                        Logger.Info($"Message split at {MaxMessageChars} chars, continuing in new bubble");
+                    }
+
                     _deltaDirty = true;
                     ResetStreamTimeout();
                     ScheduleDeltaFlush();

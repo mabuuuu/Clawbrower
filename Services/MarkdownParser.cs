@@ -23,6 +23,12 @@ public static class MarkdownParser
     private static readonly WpfBrush CodeFg = new(WpfColor.FromRgb(0xE0, 0xE0, 0xE0));
     private static readonly WpfColor DimColor = WpfColor.FromRgb(0x88, 0x88, 0xAA);
 
+    // ── 渲染热路径对象缓存：FontFamily 字符串解析、Brush 创建都很昂贵，超长消息渲染时会被调用数万次 ──
+    private static readonly System.Windows.Media.FontFamily CodeFontFamily = new("Consolas, Courier New");
+    private static readonly WpfBrush DimBrush = new(DimColor);
+    private static readonly WpfBrush QuoteMarkerBrush = new(WpfColor.FromRgb(0x55, 0x77, 0xAA));
+    private static readonly WpfBrush QuoteTextBrush = new(WpfColor.FromRgb(0xBB, 0xBB, 0xCC));
+
     // ── Public API ──
 
     /// <summary>Parse markdown into structured blocks.</summary>
@@ -33,6 +39,12 @@ public static class MarkdownParser
             return blocks;
 
         var lines = markdown.Split('\n');
+
+        // 行数上限防御：超长文本只解析前 MaxLines 行，防止解析+UI 创建卡死
+        const int MaxLines = 20_000;
+        if (lines.Length > MaxLines)
+            lines = lines[..MaxLines];
+
         int i = 0;
         while (i < lines.Length)
         {
@@ -148,7 +160,7 @@ public static class MarkdownParser
                 {
                     AddFormattedText(inlines, cells[c]);
                     if (c < cells.Length - 1)
-                        inlines.Add(new Run(" │ ") { Foreground = new WpfBrush(DimColor) });
+                        inlines.Add(new Run(" │ ") { Foreground = DimBrush });
                 }
                 continue;
             }
@@ -156,7 +168,7 @@ public static class MarkdownParser
             // Horizontal rule
             if (Regex.IsMatch(line, @"^[-*_]{3,}\s*$"))
             {
-                inlines.Add(new Run("─ ─ ─") { Foreground = new WpfBrush(DimColor), FontSize = 10 });
+                inlines.Add(new Run("─ ─ ─") { Foreground = DimBrush, FontSize = 10 });
                 continue;
             }
 
@@ -166,7 +178,7 @@ public static class MarkdownParser
             {
                 var indent = lm.Groups[1].Length;
                 var prefix = indent switch { 0 => "  •  ", <= 2 => "    ◦  ", _ => "      ▪  " };
-                inlines.Add(new Run(prefix) { Foreground = new WpfBrush(DimColor) });
+                inlines.Add(new Run(prefix) { Foreground = DimBrush });
                 AddFormattedText(inlines, lm.Groups[2].Value);
                 continue;
             }
@@ -175,7 +187,7 @@ public static class MarkdownParser
             if (om.Success)
             {
                 var num = Regex.Match(line, @"\d+\.").Value;
-                inlines.Add(new Run($"{num} ") { Foreground = new WpfBrush(DimColor) });
+                inlines.Add(new Run($"{num} ") { Foreground = DimBrush });
                 AddFormattedText(inlines, om.Groups[1].Value);
                 continue;
             }
@@ -184,11 +196,11 @@ public static class MarkdownParser
             var qm = Regex.Match(line, @"^>\s?(.+)$");
             if (qm.Success)
             {
-                inlines.Add(new Run("▎ ") { Foreground = new WpfBrush(WpfColor.FromRgb(0x55, 0x77, 0xAA)) });
+                inlines.Add(new Run("▎ ") { Foreground = QuoteMarkerBrush });
                 inlines.Add(new Run(StripInlineMarkdown(qm.Groups[1].Value))
                 {
                     FontStyle = FontStyles.Italic,
-                    Foreground = new WpfBrush(WpfColor.FromRgb(0xBB, 0xBB, 0xCC))
+                    Foreground = QuoteTextBrush
                 });
                 continue;
             }
@@ -358,7 +370,7 @@ public static class MarkdownParser
             {
                 inlines.Add(new Run(match.Groups[5].Value)
                 {
-                    FontFamily = new System.Windows.Media.FontFamily("Consolas, Courier New"),
+                    FontFamily = CodeFontFamily,
                     Foreground = CodeFg
                 });
             }
