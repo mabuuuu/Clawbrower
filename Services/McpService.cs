@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Clawbrower.Services;
@@ -12,6 +13,41 @@ public class McpService : IDisposable
     private Process? _frpcProcess;
     private volatile McpStatus _status = McpStatus.Stopped;
     private string? _lastError;
+
+    // Job Object：将子进程绑定到 Job，父进程退出/崩溃时 OS 自动终止子进程
+    private IntPtr _jobHandle = IntPtr.Zero;
+
+    // ── Job Object P/Invoke ──
+    private const int JobObjectBasicLimitInformation = 2;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string? lpName);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetInformationJobObject(IntPtr hJob, int infoType,
+        ref JOBOBJECT_BASIC_LIMIT_INFORMATION info, uint cbInfo);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr hObject);
 
     public McpStatus Status => _status;
     public string? LastError => _lastError;
@@ -129,6 +165,69 @@ public class McpService : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// 清理可能残留的孤儿进程（上次崩溃时未正常退出的 windows-mcp.exe / frpc.exe）。
+    /// </summary>
+    public static void CleanupOrphanedProcesses()
+    {
+        foreach (var name in new[] { "windows-mcp", "frpc" })
+        {
+            foreach (var proc in Process.GetProcessesByName(name))
+            {
+                try
+                {
+                    Logger.Info($"Killing orphaned process: {proc.ProcessName} (PID {proc.Id})");
+                    proc.Kill(true);
+                    proc.WaitForExit(3000);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to kill orphaned {proc.ProcessName}: {ex.Message}");
+                }
+                finally
+                {
+                    proc.Dispose();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 创建 Job Object（KILL_ON_JOB_CLOSE），确保子进程随父进程退出而终止。
+    /// </summary>
+    private void EnsureJobObject()
+    {
+        if (_jobHandle != IntPtr.Zero) return;
+        _jobHandle = CreateJobObject(IntPtr.Zero, null);
+        if (_jobHandle == IntPtr.Zero)
+        {
+            Logger.Error("CreateJobObject failed");
+            return;
+        }
+        var info = new JOBOBJECT_BASIC_LIMIT_INFORMATION
+        {
+            LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        };
+        SetInformationJobObject(_jobHandle, JobObjectBasicLimitInformation,
+            ref info, (uint)Marshal.SizeOf<JOBOBJECT_BASIC_LIMIT_INFORMATION>());
+    }
+
+    /// <summary>
+    /// 将进程加入 Job Object，使其随父进程退出而自动终止。
+    /// </summary>
+    private void AssignToJob(Process proc)
+    {
+        if (_jobHandle == IntPtr.Zero) return;
+        try
+        {
+            AssignProcessToJobObject(_jobHandle, proc.Handle);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"AssignProcessToJobObject failed for {proc.ProcessName}: {ex.Message}");
+        }
+    }
+
     public async Task StartAsync(McpConfig cfg)
     {
         if (_status == McpStatus.Running || _status == McpStatus.Starting) return;
@@ -138,6 +237,12 @@ public class McpService : IDisposable
 
         try
         {
+            // 清理上次崩溃可能残留的孤儿进程（端口占用）
+            CleanupOrphanedProcesses();
+
+            // 创建 Job Object，子进程崩溃/父进程退出时自动终止
+            EnsureJobObject();
+
             var mcpExe = GetWindowsMcpExe();
             var frpcExe = GetFrpcExe();
 
@@ -175,6 +280,7 @@ public class McpService : IDisposable
             _mcpProcess.Start();
             _mcpProcess.BeginOutputReadLine();
             _mcpProcess.BeginErrorReadLine();
+            AssignToJob(_mcpProcess);
 
             // 3. 等待 MCP 端口就绪
             await Task.Delay(3000);
@@ -205,6 +311,7 @@ public class McpService : IDisposable
                 _frpcProcess.Start();
                 _frpcProcess.BeginOutputReadLine();
                 _frpcProcess.BeginErrorReadLine();
+                AssignToJob(_frpcProcess);
                 SendMessage("frpc 隧道已启动");
             }
             else
@@ -277,6 +384,13 @@ public class McpService : IDisposable
 
         // 通知外部状态变更
         OnStatusChanged?.Invoke(McpStatus.Stopped);
+
+        // 关闭 Job Object 句柄（子进程已被 Kill，这里仅释放资源）
+        if (_jobHandle != IntPtr.Zero)
+        {
+            CloseHandle(_jobHandle);
+            _jobHandle = IntPtr.Zero;
+        }
     }
 
     private async Task MonitorProcessesAsync()

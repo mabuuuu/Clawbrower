@@ -39,6 +39,9 @@ public partial class App : System.Windows.Application
 
         Logger.Info("App starting");
 
+        // 清理上次崩溃可能残留的 MCP/frpc 孤儿进程（端口占用）
+        McpService.CleanupOrphanedProcesses();
+
         // Self-test: verify MarkdownParser table support
         VerifyMarkdownParser();
 

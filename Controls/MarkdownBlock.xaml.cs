@@ -64,7 +64,15 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 control.ContentRoot.Children.Clear();
                 control.ContentRoot.Children.Add(control._streamingBlock);
             }
-            control._streamingBlock.Text = MarkdownParser.SanitizeSurrogates(e.NewValue as string ?? "");
+            var text = e.NewValue as string ?? "";
+            // 截断：流式时只显示最后 MaxStreamingChars 字符，避免超长 TextBlock 文字布局卡死 UI。
+            // 流式结束（IsStreaming=false）后走 RenderMarkdown 分段渲染完整内容。
+            const int MaxStreamingChars = 5000;
+            if (text.Length > MaxStreamingChars)
+            {
+                text = "…（流式中，仅显示末尾内容）\n" + text[^MaxStreamingChars..];
+            }
+            control._streamingBlock.Text = MarkdownParser.SanitizeSurrogates(text);
         }
         else
         {

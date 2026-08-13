@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Windows.Threading;
 using Clawbrower.Models;
 using Clawbrower.Services;
 using WpfApp = System.Windows.Application;
@@ -24,6 +25,10 @@ public class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _streamTimeoutCts;
     private int _reconnectCount;
     private readonly SemaphoreSlim _connectGate = new(1, 1);
+
+    // delta 节流：累积 delta 但不每次都同步到 UI，每 150ms 批量刷新一次
+    private DispatcherTimer? _deltaFlushTimer;
+    private bool _deltaDirty;
 
     // 配对轮询
     private bool _pairingPolling;
@@ -205,6 +210,8 @@ public class MainViewModel : INotifyPropertyChanged
                         await LoadRecentHistoryAsync();
                         _currentAiMessage = "";
                         _lastDeltaText = "";
+                        _deltaFlushTimer?.Stop();
+                        _deltaDirty = false;
                         var aiMsg = new ChatMessage { Role = ChatRole.Assistant, Content = "", IsStreaming = true };
                         Messages.Add(aiMsg);
                         IsStreaming = true;
@@ -226,16 +233,16 @@ public class MainViewModel : INotifyPropertyChanged
                     var preview = text.Length > 40 ? text[..40] + "..." : text;
                     Logger.Info($"Delta[{text.Length}]: {preview.Replace("\n", "\\n")}");
                     _currentAiMessage += text;
-                    var ai = FindLastAssistantMessage();
-                    if (ai != null) ai.Content = _currentAiMessage;
-                    OnMessageUpdated?.Invoke();
+                    _deltaDirty = true;
                     ResetStreamTimeout();
+                    ScheduleDeltaFlush();
                 });
 
                 client.OnStreamReset += () => SafeInvoke(() =>
                 {
                     if (!IsCurrentClient()) return;
-                    Logger.Info("Stream reset — clearing accumulated text");
+                    Logger.Info("Stream reset - clearing accumulated text");
+                    FlushDelta();
                     _lastDeltaText = "";
                     _currentAiMessage = "";
                     var ai = FindLastAssistantMessage();
@@ -419,8 +426,45 @@ public class MainViewModel : INotifyPropertyChanged
         Logger.Info("Pairing poll ended");
     }
 
+    /// <summary>
+    /// 调度 delta flush：timer 固定 150ms 间隔运行，不因 delta 到达而重置。
+    /// 避免 delta 过于密集时 timer 被无限重置导致 UI 永不更新。
+    /// </summary>
+    private void ScheduleDeltaFlush()
+    {
+        if (_deltaFlushTimer == null)
+        {
+            _deltaFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(150)
+            };
+            _deltaFlushTimer.Tick += (_, _) => FlushDelta();
+        }
+        if (!_deltaFlushTimer.IsEnabled)
+            _deltaFlushTimer.Start();
+    }
+
+    /// <summary>
+    /// 将累积的 delta 同步到 UI（ai.Content + OnMessageUpdated）。
+    /// 如果没有脏数据则停止 timer。
+    /// </summary>
+    private void FlushDelta()
+    {
+        if (!_deltaDirty)
+        {
+            _deltaFlushTimer?.Stop();
+            return;
+        }
+        _deltaDirty = false;
+        var ai = FindLastAssistantMessage();
+        if (ai != null) ai.Content = _currentAiMessage;
+        OnMessageUpdated?.Invoke();
+    }
+
     private void StopStreaming()
     {
+        FlushDelta(); // 确保最后的 delta 已同步到 UI
+        _deltaFlushTimer?.Stop();
         _streamTimeoutCts?.Cancel();
         IsStreaming = false;
         ThinkingText = "";
@@ -468,6 +512,8 @@ public class MainViewModel : INotifyPropertyChanged
         Messages.Add(aiMsg);
         _currentAiMessage = "";
         _lastDeltaText = "";
+        _deltaFlushTimer?.Stop();
+        _deltaDirty = false;
         IsStreaming = true;
         ThinkingText = "思考中...";
         ResetStreamTimeout();
@@ -991,6 +1037,8 @@ public class MainViewModel : INotifyPropertyChanged
         Logger.Info($"Clearing local messages for session: {_sessionKey}");
         _streamTimeoutCts?.Cancel();
         _streamTimeoutCts = null;
+        _deltaFlushTimer?.Stop();
+        _deltaDirty = false;
         _currentAiMessage = "";
         _lastDeltaText = "";
         IsStreaming = false;
