@@ -410,7 +410,9 @@ public partial class MainWindow : Window
         for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
         {
             var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
-            if (child is Controls.MarkdownBlock mb && mb.Parent is Border)
+            // MarkdownBlock 的父是 StackPanel（Bubble > StackPanel > MarkdownBlock），
+            // 不能依赖 Parent is Border 判断——直接对所有 MarkdownBlock 设置 Foreground。
+            if (child is Controls.MarkdownBlock mb)
             {
                 mb.Foreground = brush;
                 SyncFlowDocForeground(child, brush);

@@ -294,7 +294,7 @@
                                                     <StackPanel>
                                                         <controls:MarkdownBlock MarkdownText="{Binding Content}"
                                                                                 IsStreaming="{Binding IsStreaming}"
-                                                                                Foreground="#EEEEEE">
+                                                                                Foreground="{DynamicResource TextBrush}">
                                                             <controls:MarkdownBlock.ContextMenu>
                                                                 <ContextMenu>
                                                                     <MenuItem Header="复制" Click="CopyMessage_Click"/>
@@ -327,7 +327,7 @@
                                             <controls:MarkdownBlock x:Name="ContentMarkdown"
                                                                     MarkdownText="{Binding Content}"
                                                                     IsStreaming="{Binding IsStreaming}"
-                                                                    Foreground="#EEEEEE">
+                                                                    Foreground="{DynamicResource TextBrush}">
                                                 <controls:MarkdownBlock.ContextMenu>
                                                     <ContextMenu>
                                                         <MenuItem Header="复制" Click="CopyMessage_Click"/>

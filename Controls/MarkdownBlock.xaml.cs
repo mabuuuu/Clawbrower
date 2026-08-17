@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -11,19 +12,19 @@ using WpfBrush = System.Windows.Media.SolidColorBrush;
 using WpfFontStyle = System.Windows.FontStyle;
 using WpfFontFamily = System.Windows.Media.FontFamily;
 using WpfTextBox = System.Windows.Controls.TextBox;
+using WpfBinding = System.Windows.Data.Binding;
 
 namespace Clawbrower.Controls;
 
 public partial class MarkdownBlock : System.Windows.Controls.UserControl
 {
     // ── 静态缓存：渲染热路径中的重复对象（FontFamily 字符串解析、Brush 创建都很昂贵）──
+    // 注意：文字颜色不在此硬编码——文字色应继承控件 Foreground（跟随用户设置），
+    // 只有装饰性背景/边框色可在此缓存。
     private static readonly WpfFontFamily YaHeiFont = new("Microsoft YaHei UI");
     private static readonly WpfBrush HeaderBgBrush = new(WpfColor.FromRgb(0x2A, 0x2A, 0x3A));
     private static readonly WpfBrush CellBorderBrush = new(WpfColor.FromRgb(0x33, 0x33, 0x44));
     private static readonly WpfBrush GridLineBrush = new(WpfColor.FromRgb(0x44, 0x44, 0x55));
-    private static readonly WpfBrush HeaderFgBrush = new(WpfColor.FromRgb(0xEE, 0xEE, 0xEE));
-    private static readonly WpfBrush CellFgBrush = new(WpfColor.FromRgb(0xDD, 0xDD, 0xDD));
-    private static readonly WpfBrush ListMarkerBrush = new(WpfColor.FromRgb(0x88, 0x88, 0xAA));
     private static readonly WpfBrush QuoteBorderBrush = new(WpfColor.FromRgb(0x55, 0x77, 0xAA));
 
     public static readonly DependencyProperty MarkdownTextProperty =
@@ -189,11 +190,12 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
     /// <summary>
     /// 创建只读 TextBox（替代 TextBlock），支持文本选择和 Ctrl+C 复制。
     /// WPF 的 TextBlock 不支持文本选择，用 TextBox（IsReadOnly + 透明样式）实现。
+    /// TextBox 默认样式强制黑色前景，必须用 Binding 跟随本控件的 Foreground（用户文字颜色设置）。
     /// </summary>
-    private static WpfTextBox CreateSelectableText(
+    private WpfTextBox CreateSelectableText(
         string text, double fontSize, FontWeight weight, WpfFontStyle style, Thickness margin)
     {
-        return new WpfTextBox
+        var tb = new WpfTextBox
         {
             Text = text,
             FontFamily = YaHeiFont,
@@ -210,6 +212,9 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             CaretBrush = new WpfBrush(WpfColor.FromArgb(0x80, 0x67, 0x8C, 0xB3)),
             SelectionBrush = new WpfBrush(WpfColor.FromArgb(0x55, 0x67, 0x8C, 0xB3))
         };
+        tb.SetBinding(WpfTextBox.ForegroundProperty,
+            new WpfBinding(nameof(Foreground)) { Source = this });
+        return tb;
     }
 
     private static Grid CreateFlowTable(MdTable mdTable)
@@ -241,8 +246,8 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                     FontFamily = YaHeiFont,
                     FontSize = 12,
                     FontWeight = FontWeights.Bold,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = HeaderFgBrush,
+                    TextWrapping = TextWrapping.Wrap
+                    // Foreground 继承 MarkdownBlock.Foreground（跟随用户文字颜色设置）
                 }
             };
             Grid.SetRow(cell, row);
@@ -268,8 +273,8 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                         Text = MarkdownParser.StripInlineMarkdown(text),
                         FontFamily = YaHeiFont,
                         FontSize = 12,
-                        TextWrapping = TextWrapping.Wrap,
-                        Foreground = CellFgBrush,
+                        TextWrapping = TextWrapping.Wrap
+                        // Foreground 继承 MarkdownBlock.Foreground（跟随用户文字颜色设置）
                     }
                 };
                 Grid.SetRow(cell, row);
@@ -282,7 +287,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         return grid;
     }
 
-    private static StackPanel CreateFlowList(MdList l)
+    private StackPanel CreateFlowList(MdList l)
     {
         // 列表用 StackPanel 自绘（不用 WPF List：ListItem -> Paragraph 走 PTS 容器布局）
         var stack = new StackPanel { Margin = new Thickness(0, 2, 0, 2) };
@@ -301,7 +306,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 Text = marker,
                 FontFamily = YaHeiFont,
                 FontSize = 13,
-                Foreground = ListMarkerBrush,
+                Opacity = 0.7, // 弱化标记（颜色继承 Foreground，跟随用户设置）
                 Margin = new Thickness(0, 0, 2, 0)
             };
             Grid.SetColumn(markerTb, 0);
@@ -319,7 +324,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         return stack;
     }
 
-    private static Border CreateFlowQuote(MdQuote q)
+    private Border CreateFlowQuote(MdQuote q)
     {
         return new Border
         {
