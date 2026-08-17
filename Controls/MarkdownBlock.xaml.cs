@@ -10,6 +10,7 @@ using WpfColor = System.Windows.Media.Color;
 using WpfBrush = System.Windows.Media.SolidColorBrush;
 using WpfFontStyle = System.Windows.FontStyle;
 using WpfFontFamily = System.Windows.Media.FontFamily;
+using WpfTextBox = System.Windows.Controls.TextBox;
 
 namespace Clawbrower.Controls;
 
@@ -98,7 +99,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             {
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13,
-                FontFamily = YaHeiFont
+                FontFamily = YaHeiFont,
             };
             ContentRoot.Children.Clear();
             ContentRoot.Children.Add(_streamingBlock);
@@ -144,15 +145,16 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                 switch (block)
                 {
                     case MdParagraph p:
-                        ContentRoot.Children.Add(CreateTextBlock(p.Inlines, 13,
+                        ContentRoot.Children.Add(CreateSelectableText(
+                            MarkdownParser.StripInlineMarkdown(p.Text), 13,
                             FontWeights.Normal, FontStyles.Normal, new Thickness(0, 2, 0, 2)));
                         break;
 
                     case MdHeader h:
                         var hSize = h.Level switch { 1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0 };
-                        ContentRoot.Children.Add(CreateTextBlock(
-                            MarkdownParser.ParseInlineLine(h.Text), hSize, FontWeights.Bold, FontStyles.Normal,
-                            new Thickness(0, 6, 0, 2)));
+                        ContentRoot.Children.Add(CreateSelectableText(
+                            MarkdownParser.StripInlineMarkdown(h.Text), hSize,
+                            FontWeights.Bold, FontStyles.Normal, new Thickness(0, 6, 0, 2)));
                         break;
 
                     case MdTable t:
@@ -184,21 +186,30 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
         }
     }
 
-    private static TextBlock CreateTextBlock(
-        IEnumerable<Inline> inlines, double fontSize, FontWeight weight, WpfFontStyle style, Thickness margin)
+    /// <summary>
+    /// 创建只读 TextBox（替代 TextBlock），支持文本选择和 Ctrl+C 复制。
+    /// WPF 的 TextBlock 不支持文本选择，用 TextBox（IsReadOnly + 透明样式）实现。
+    /// </summary>
+    private static WpfTextBox CreateSelectableText(
+        string text, double fontSize, FontWeight weight, WpfFontStyle style, Thickness margin)
     {
-        var tb = new TextBlock
+        return new WpfTextBox
         {
+            Text = text,
             FontFamily = YaHeiFont,
             FontSize = fontSize,
             FontWeight = weight,
             FontStyle = style,
             Margin = margin,
-            TextWrapping = TextWrapping.Wrap
+            TextWrapping = TextWrapping.Wrap,
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            Background = null,
+            Padding = new Thickness(0),
+            AcceptsReturn = false,
+            CaretBrush = new WpfBrush(WpfColor.FromArgb(0x80, 0x67, 0x8C, 0xB3)),
+            SelectionBrush = new WpfBrush(WpfColor.FromArgb(0x55, 0x67, 0x8C, 0xB3))
         };
-        foreach (var inline in inlines)
-            tb.Inlines.Add(inline);
-        return tb;
     }
 
     private static Grid CreateFlowTable(MdTable mdTable)
@@ -231,7 +242,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                     FontSize = 12,
                     FontWeight = FontWeights.Bold,
                     TextWrapping = TextWrapping.Wrap,
-                    Foreground = HeaderFgBrush
+                    Foreground = HeaderFgBrush,
                 }
             };
             Grid.SetRow(cell, row);
@@ -258,7 +269,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
                         FontFamily = YaHeiFont,
                         FontSize = 12,
                         TextWrapping = TextWrapping.Wrap,
-                        Foreground = CellFgBrush
+                        Foreground = CellFgBrush,
                     }
                 };
                 Grid.SetRow(cell, row);
@@ -273,30 +284,35 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
     private static StackPanel CreateFlowList(MdList l)
     {
-        // 列表用 StackPanel 自绘（不用 WPF List：ListItem → Paragraph 走 PTS 容器布局）
+        // 列表用 StackPanel 自绘（不用 WPF List：ListItem -> Paragraph 走 PTS 容器布局）
         var stack = new StackPanel { Margin = new Thickness(0, 2, 0, 2) };
         var number = 1;
         foreach (var item in l.Items)
         {
-            var row = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            // 每行用 Grid（marker 列 Auto + content 列 Star），让 content 有约束宽度可换行。
+            // 之前用水平 StackPanel：给子元素无限宽度，TextWrapping.Wrap 无效，长内容被截断。
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
             var marker = l.Ordered ? $"{number}. " : "•  ";
-            row.Children.Add(new TextBlock
+            var markerTb = new TextBlock
             {
                 Text = marker,
                 FontFamily = YaHeiFont,
                 FontSize = 13,
                 Foreground = ListMarkerBrush,
                 Margin = new Thickness(0, 0, 2, 0)
-            });
-            var content = new TextBlock
-            {
-                FontFamily = YaHeiFont,
-                FontSize = 13,
-                TextWrapping = TextWrapping.Wrap
             };
-            foreach (var inline in MarkdownParser.ParseInlineLine(item))
-                content.Inlines.Add(inline);
+            Grid.SetColumn(markerTb, 0);
+            row.Children.Add(markerTb);
+
+            var content = CreateSelectableText(
+                MarkdownParser.StripInlineMarkdown(item), 13,
+                FontWeights.Normal, FontStyles.Normal, new Thickness(0));
+            Grid.SetColumn(content, 1);
             row.Children.Add(content);
+
             stack.Children.Add(row);
             number++;
         }
@@ -311,7 +327,7 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             BorderThickness = new Thickness(4, 0, 0, 0),
             Padding = new Thickness(8, 0, 0, 0),
             Margin = new Thickness(0, 2, 0, 2),
-            Child = CreateTextBlock(MarkdownParser.ParseInlineLine(q.Text), 13,
+            Child = CreateSelectableText(MarkdownParser.StripInlineMarkdown(q.Text), 13,
                 FontWeights.Normal, FontStyles.Italic, new Thickness(0))
         };
     }

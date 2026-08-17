@@ -11,6 +11,8 @@ public abstract class MdBlock { }
 public class MdParagraph : MdBlock
 {
     public List<Inline> Inlines { get; set; } = new();
+    /// <summary>原始文本行（未解析 inline 格式），用于 TextBox 纯文本渲染</summary>
+    public string Text { get; set; } = "";
 }
 
 /// <summary>Header line (## text)</summary>

@@ -108,7 +108,7 @@ public static class MarkdownParser
             }
 
             // Regular paragraph
-            blocks.Add(new MdParagraph { Inlines = ParseInlineLine(line) });
+            blocks.Add(new MdParagraph { Inlines = ParseInlineLine(line), Text = line });
             i++;
         }
 
