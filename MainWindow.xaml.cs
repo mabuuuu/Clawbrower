@@ -406,6 +406,7 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 滚动到消息列表末尾（ListBox 虚拟化下用 ScrollIntoView + 内部 ScrollViewer.ScrollToEnd）。
+    /// 虚拟化下最后一项高度需渲染后才确定，因此延迟多轮滚动确保完全到底。
     /// </summary>
     private void ScrollToMessageEnd()
     {
@@ -414,11 +415,18 @@ public partial class MainWindow : Window
             if (MessageList.Items.Count == 0) return;
             var last = MessageList.Items[MessageList.Items.Count - 1];
             MessageList.ScrollIntoView(last);
-            // 确保完全滚到底（ScrollIntoView 在虚拟化下可能只滚到可见区）
-            foreach (var sv in FindVisualChildren<System.Windows.Controls.ScrollViewer>(MessageList))
+            // 找到内部 ScrollViewer 滚到底；虚拟化下最后一项渲染后高度才确定，多轮重试
+            for (int round = 0; round < 3; round++)
             {
-                sv.ScrollToEnd();
-                break;
+                var sv = FindVisualChild<System.Windows.Controls.ScrollViewer>(MessageList);
+                if (sv != null)
+                {
+                    sv.ScrollToEnd();
+                    if (sv.ScrollableHeight == 0 || Math.Abs(sv.VerticalOffset - sv.ScrollableHeight) < 2)
+                        break;
+                }
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                    System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
             }
         }
         catch (Exception ex) { Logger.Error($"ScrollToMessageEnd: {ex.Message}"); }
@@ -462,6 +470,18 @@ public partial class MainWindow : Window
             if (child is T t) yield return t;
             foreach (var desc in FindVisualChildren<T>(child)) yield return desc;
         }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T t) return t;
+            var found = FindVisualChild<T>(child);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     protected override void OnClosed(EventArgs e)
