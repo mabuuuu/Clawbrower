@@ -300,10 +300,15 @@ public partial class MainWindow : Window
     {
         if (_vm.IsConnected && !_vm.IsLoadingHistory)
         {
+            // 加载历史期间抑制 CollectionChanged 的自动滚动（避免插入开头时反复滚动）
             _suppressScrollToEnd = true;
             _ = _vm.LoadHistoryAsync().ContinueWith(_ =>
-                Dispatcher.InvokeAsync(() => { _suppressScrollToEnd = false; },
-                    System.Windows.Threading.DispatcherPriority.Background));
+                Dispatcher.InvokeAsync(() =>
+                {
+                    _suppressScrollToEnd = false;
+                    // 加载历史后停留在最底端（最新消息），与用户期望一致
+                    ScrollToMessageEnd();
+                }, System.Windows.Threading.DispatcherPriority.Background));
         }
     }
 
