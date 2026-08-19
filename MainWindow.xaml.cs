@@ -50,14 +50,14 @@ public partial class MainWindow : Window
             Dispatcher.InvokeAsync(() =>
             {
                 if (!_suppressScrollToEnd)
-                    MessageScroll.ScrollToEnd();
+                    ScrollToMessageEnd();
             }, System.Windows.Threading.DispatcherPriority.Background);
 
         _vm.OnMessageUpdated += () =>
             Dispatcher.InvokeAsync(() =>
             {
                 if (!_suppressScrollToEnd)
-                    MessageScroll.ScrollToEnd();
+                    ScrollToMessageEnd();
             }, System.Windows.Threading.DispatcherPriority.Background);
 
         // 窗口缩放时，通知所有 MarkdownBlock 按新可用宽度重新布局（处理放大时不恢复的 bug）
@@ -73,7 +73,7 @@ public partial class MainWindow : Window
             foreach (var mb in FindVisualChildren<MarkdownBlock>(MessageList))
                 mb.InvalidateLayout();
         };
-        MessageScroll.SizeChanged += (_, _) =>
+        MessageList.SizeChanged += (_, _) =>
         {
             _resizeTimer.Stop();
             _resizeTimer.Start();
@@ -398,10 +398,30 @@ public partial class MainWindow : Window
                 InputBox.CaretBrush = textBrush;
 
                 // Walk message bubbles (hardcoded Foreground, not DynamicResource)
-                UpdateBubbleForeground(MessageScroll, textBrush);
+                UpdateBubbleForeground(MessageList, textBrush);
             }
             catch (Exception ex) { Logger.Error($"ApplyTextStyle: {ex.Message}"); }
         }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// 滚动到消息列表末尾（ListBox 虚拟化下用 ScrollIntoView + 内部 ScrollViewer.ScrollToEnd）。
+    /// </summary>
+    private void ScrollToMessageEnd()
+    {
+        try
+        {
+            if (MessageList.Items.Count == 0) return;
+            var last = MessageList.Items[MessageList.Items.Count - 1];
+            MessageList.ScrollIntoView(last);
+            // 确保完全滚到底（ScrollIntoView 在虚拟化下可能只滚到可见区）
+            foreach (var sv in FindVisualChildren<System.Windows.Controls.ScrollViewer>(MessageList))
+            {
+                sv.ScrollToEnd();
+                break;
+            }
+        }
+        catch (Exception ex) { Logger.Error($"ScrollToMessageEnd: {ex.Message}"); }
     }
 
     private static void UpdateBubbleForeground(

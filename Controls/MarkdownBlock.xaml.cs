@@ -153,9 +153,16 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
 
                     case MdHeader h:
                         var hSize = h.Level switch { 1 => 18.0, 2 => 16.0, 3 => 14.0, _ => 13.0 };
-                        ContentRoot.Children.Add(CreateSelectableText(
-                            MarkdownParser.StripInlineMarkdown(h.Text), hSize,
-                            FontWeights.Bold, FontStyles.Normal, new Thickness(0, 6, 0, 2)));
+                        // 标题用 TextBlock（性能好，Foreground 继承），不需要选中复制
+                        ContentRoot.Children.Add(new TextBlock
+                        {
+                            Text = MarkdownParser.StripInlineMarkdown(h.Text),
+                            FontFamily = YaHeiFont,
+                            FontSize = hSize,
+                            FontWeight = FontWeights.Bold,
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 6, 0, 2)
+                        });
                         break;
 
                     case MdTable t:
@@ -312,9 +319,14 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             Grid.SetColumn(markerTb, 0);
             row.Children.Add(markerTb);
 
-            var content = CreateSelectableText(
-                MarkdownParser.StripInlineMarkdown(item), 13,
-                FontWeights.Normal, FontStyles.Normal, new Thickness(0));
+            // 列表内容用 TextBlock（性能好，Foreground 继承）；复制可右键"复制"全文
+            var content = new TextBlock
+            {
+                Text = MarkdownParser.StripInlineMarkdown(item),
+                FontFamily = YaHeiFont,
+                FontSize = 13,
+                TextWrapping = TextWrapping.Wrap
+            };
             Grid.SetColumn(content, 1);
             row.Children.Add(content);
 
@@ -332,8 +344,15 @@ public partial class MarkdownBlock : System.Windows.Controls.UserControl
             BorderThickness = new Thickness(4, 0, 0, 0),
             Padding = new Thickness(8, 0, 0, 0),
             Margin = new Thickness(0, 2, 0, 2),
-            Child = CreateSelectableText(MarkdownParser.StripInlineMarkdown(q.Text), 13,
-                FontWeights.Normal, FontStyles.Italic, new Thickness(0))
+            // 引用用 TextBlock（性能好，Foreground 继承）
+            Child = new TextBlock
+            {
+                Text = MarkdownParser.StripInlineMarkdown(q.Text),
+                FontFamily = YaHeiFont,
+                FontSize = 13,
+                FontStyle = FontStyles.Italic,
+                TextWrapping = TextWrapping.Wrap
+            }
         };
     }
 }

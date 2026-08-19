@@ -222,28 +222,57 @@
                 </Border>
 
                 <!-- Messages area -->
-                <ScrollViewer x:Name="MessageScroll"
-                              Grid.Row="1"
-                              VerticalScrollBarVisibility="Auto"
-                              Padding="10,6"
-                              PanningMode="VerticalOnly"
-                              >
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <ItemsControl x:Name="MessageList"
-                                      Grid.Row="0"
-                                      Background="Transparent"
-                                      ItemsSource="{Binding Messages}">
-                            <ItemsControl.ContextMenu>
+                <Grid Grid.Row="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <!-- 用 ListBox 实现消息列表虚拟化：只渲染可见消息，
+                         避免加载历史时全部消息渲染导致 UI 卡死。
+                         ListBox 模板自带 ScrollViewer + VirtualizingStackPanel，
+                         CanContentScroll 自动委托 IScrollInfo -->
+                    <ListBox x:Name="MessageList"
+                             Grid.Row="0"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="10,6"
+                             ItemsSource="{Binding Messages}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             ScrollViewer.CanContentScroll="True"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel/>
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Focusable" Value="False"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border Background="{TemplateBinding Background}">
+                                                <ContentPresenter/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="加载历史消息" Click="LoadMoreHistory_Click"/>
                                     <MenuItem Header="清除当前会话本地记录" Click="ClearMessages_Click"/>
                                 </ContextMenu>
-                            </ItemsControl.ContextMenu>
-                            <ItemsControl.ItemTemplate>
+                            </ListBox.ContextMenu>
+                            <ListBox.ItemTemplate>
                                 <DataTemplate DataType="{x:Type models:ChatMessage}">
                                     <Border x:Name="Bubble"
                                             CornerRadius="12"
@@ -362,18 +391,17 @@
                                         </MultiDataTrigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <!-- Thinking indicator -->
-                        <TextBlock Grid.Row="1"
-                                   Text="{Binding ThinkingText}"
-                                   Foreground="{DynamicResource TextDimBrush}"
-                                   FontSize="12"
-                                   FontStyle="Italic"
-                                   Margin="12,4,0,0"
-                                   Visibility="{Binding ThinkingVisible, Converter={StaticResource BoolToVis}}"/>
-                    </Grid>
-                </ScrollViewer>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    <!-- Thinking indicator -->
+                    <TextBlock Grid.Row="1"
+                               Text="{Binding ThinkingText}"
+                               Foreground="{DynamicResource TextDimBrush}"
+                               FontSize="12"
+                               FontStyle="Italic"
+                               Margin="12,4,0,0"
+                               Visibility="{Binding ThinkingVisible, Converter={StaticResource BoolToVis}}"/>
+                </Grid>
 
                 <!-- Input area -->
                 <Border x:Name="InputArea" Grid.Row="2"
