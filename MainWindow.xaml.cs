@@ -403,36 +403,21 @@ public partial class MainWindow : Window
                 InputBox.CaretBrush = textBrush;
 
                 // Walk message bubbles (hardcoded Foreground, not DynamicResource)
-                UpdateBubbleForeground(MessageList, textBrush);
+                UpdateBubbleForeground(MessageScroll, textBrush);
             }
             catch (Exception ex) { Logger.Error($"ApplyTextStyle: {ex.Message}"); }
         }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     /// <summary>
-    /// 滚动到消息列表末尾（ListBox 虚拟化下用 ScrollIntoView + 内部 ScrollViewer.ScrollToEnd）。
-    /// 虚拟化下最后一项高度需渲染后才确定，因此延迟多轮滚动确保完全到底。
+    /// 滚动到消息列表末尾（像素滚动 ScrollViewer 直接滚到底，无虚拟化高度问题）。
     /// </summary>
     private void ScrollToMessageEnd()
     {
         try
         {
             if (MessageList.Items.Count == 0) return;
-            var last = MessageList.Items[MessageList.Items.Count - 1];
-            MessageList.ScrollIntoView(last);
-            // 找到内部 ScrollViewer 滚到底；虚拟化下最后一项渲染后高度才确定，多轮重试
-            for (int round = 0; round < 3; round++)
-            {
-                var sv = FindVisualChild<System.Windows.Controls.ScrollViewer>(MessageList);
-                if (sv != null)
-                {
-                    sv.ScrollToEnd();
-                    if (sv.ScrollableHeight == 0 || Math.Abs(sv.VerticalOffset - sv.ScrollableHeight) < 2)
-                        break;
-                }
-                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
-                    System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
-            }
+            MessageScroll.ScrollToEnd();
         }
         catch (Exception ex) { Logger.Error($"ScrollToMessageEnd: {ex.Message}"); }
     }

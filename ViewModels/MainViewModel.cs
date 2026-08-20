@@ -774,10 +774,17 @@ public class MainViewModel : INotifyPropertyChanged
 
             Messages.Clear();
 
-            // 虚拟化已生效（ListBox 只渲染可见消息），同步插入所有历史即可——
-            // 一次 Insert 只需几 ms，且只产生一次布局（避免分批插入导致多帧重排闪烁）。
-            for (int i = 0; i < historyMessages.Count; i++)
-                Messages.Insert(i, historyMessages[i]);
+            // 不虚拟化（像素滚动，无回跳），历史消息必须分批插入：
+            // 一次性插入会让渲染任务在 Dispatcher 积压，连续占用 UI 线程导致"未响应"。
+            // 每批插入后让出 UI 线程，渲染任务分散执行。
+            const int HistoryBatchSize = 4;
+            for (int start = 0; start < historyMessages.Count; start += HistoryBatchSize)
+            {
+                int end = Math.Min(start + HistoryBatchSize, historyMessages.Count);
+                for (int i = start; i < end; i++)
+                    Messages.Insert(i, historyMessages[i]);
+                await Task.Delay(20);
+            }
 
             Logger.Info($"History loaded: {historyMessages.Count} messages");
             OnMessageUpdated?.Invoke();
@@ -1046,9 +1053,15 @@ public class MainViewModel : INotifyPropertyChanged
             Logger.Info($"BuildToolUseInputMap: {inputMap.Count} entries");
             CorrelateToolMessages(historyMessages, inputMap);
 
-            // 虚拟化已生效，同步添加所有消息（一次布局，避免分批闪烁）
-            foreach (var hm in historyMessages)
-                Messages.Add(hm);
+            // 不虚拟化，分批添加避免渲染积压占满 UI 线程
+            const int HistoryBatchSize = 4;
+            for (int start = 0; start < historyMessages.Count; start += HistoryBatchSize)
+            {
+                int end = Math.Min(start + HistoryBatchSize, historyMessages.Count);
+                for (int i = start; i < end; i++)
+                    Messages.Add(historyMessages[i]);
+                await Task.Delay(20);
+            }
 
             Logger.Info($"Recent history loaded: {historyMessages.Count} messages");
         }
