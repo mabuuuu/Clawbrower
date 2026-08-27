@@ -8,6 +8,7 @@ using SpeechMode = Clawbrower.Services.SpeechMode;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using Media = System.Windows.Media;
 using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using ComboBox = System.Windows.Controls.ComboBox;
 
 namespace Clawbrower;
 
@@ -67,6 +68,9 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
     // ── 语音 PTT 按键 ──
     private Key _capturedPttKey = Key.F12;
 
+    // ── Gateway 连接历史（属性初始化器在绑定前就绪，供地址下拉框展示）──
+    public List<GatewayHistoryItem> GatewayHistoryItems { get; } = ConfigService.GetGatewayHistoryItems();
+
     // ── 语音原始值（模式/阈值变更需重启语音服务）──
     private readonly SpeechMode _origSpeechMode;
     private readonly double _origSpeechThreshold;
@@ -114,7 +118,7 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         UpdatePttKeyDisplay();
         SpeechServerUrl.Text = speechCfg.ServerUrl ?? "";
 
-        Loaded += (_, _) => { UrlBox.SelectAll(); UrlBox.Focus(); };
+        Loaded += (_, _) => { UrlBox.Focus(); };
     }
 
     // ════════ 外观：颜色选择 ════════
@@ -161,6 +165,20 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
     private void AuthTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!IsLoaded) return;
+        UpdateAuthVisibility();
+    }
+
+    // ════════ 连接：选择历史地址 → 自动带出认证方式与凭据 ════════
+    private void UrlBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (sender is not ComboBox cb || cb.SelectedItem is not GatewayHistoryItem item) return;
+
+        // 编辑框只显示纯地址（下拉行才展示认证方式摘要）
+        cb.Text = item.Url;
+        AuthTypeCombo.SelectedIndex = item.UsePasswordAuth ? 1 : 0;
+        TokenBox.Text = item.Token ?? "";
+        PasswordBox.Password = item.Password ?? "";
         UpdateAuthVisibility();
     }
 
@@ -258,6 +276,7 @@ public partial class SettingsWindow : Window, INotifyPropertyChanged
         c.GatewayToken = newToken;
         c.GatewayPassword = newPassword;
         c.IsConfigured = true;
+        ConfigService.AddGatewayHistory(newUrl, usePassword, newToken, newPassword);
 
         // ── 语音 ──
         var speechCfg = ConfigService.GetSpeechConfig();

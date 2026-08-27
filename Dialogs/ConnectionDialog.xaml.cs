@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
+using Clawbrower.Services;
 using KKey = System.Windows.Input.Key;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using ComboBox = System.Windows.Controls.ComboBox;
 
 namespace Clawbrower.Dialogs;
 
@@ -13,12 +15,14 @@ public partial class ConnectionDialog : Window
     public string? GatewayPassword { get; private set; }
     public bool UsePasswordAuth { get; private set; }
 
+    /// <summary>Gateway 连接历史（下拉项，选中自动填充凭据）。</summary>
+    public List<GatewayHistoryItem> HistoryItems { get; } = ConfigService.GetGatewayHistoryItems();
+
     public ConnectionDialog(string url, string? token, string? password, bool usePasswordAuth)
     {
         InitializeComponent();
+        DataContext = this;
         UrlBox.Text = url;
-        UrlBox.SelectAll();
-
         UsePasswordAuth = usePasswordAuth;
         AuthTypeCombo.SelectedIndex = usePasswordAuth ? 1 : 0;
         TokenBox.Text = token ?? "";
@@ -40,8 +44,23 @@ public partial class ConnectionDialog : Window
         UsePasswordAuth = AuthTypeCombo.SelectedIndex == 1;
         GatewayToken = UsePasswordAuth ? null : TokenBox.Text.Trim();
         GatewayPassword = UsePasswordAuth ? PasswordBox.Password : null;
+        ConfigService.AddGatewayHistory(GatewayUrl, UsePasswordAuth, GatewayToken, GatewayPassword);
         DialogResult = true;
         Close();
+    }
+
+    // ════════ 选择历史地址 → 自动带出认证方式与凭据 ════════
+    private void UrlBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (sender is not ComboBox cb || cb.SelectedItem is not GatewayHistoryItem item) return;
+
+        // 编辑框只显示纯地址（下拉行才展示认证方式摘要）
+        cb.Text = item.Url;
+        AuthTypeCombo.SelectedIndex = item.UsePasswordAuth ? 1 : 0;
+        TokenBox.Text = item.Token ?? "";
+        PasswordBox.Password = item.Password ?? "";
+        UpdateAuthVisibility();
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
@@ -58,6 +77,7 @@ public partial class ConnectionDialog : Window
             UsePasswordAuth = AuthTypeCombo.SelectedIndex == 1;
             GatewayToken = UsePasswordAuth ? null : TokenBox.Text.Trim();
             GatewayPassword = UsePasswordAuth ? PasswordBox.Password : null;
+            ConfigService.AddGatewayHistory(GatewayUrl, UsePasswordAuth, GatewayToken, GatewayPassword);
             DialogResult = true;
             Close();
         }

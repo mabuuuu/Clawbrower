@@ -180,8 +180,26 @@
                 <TabItem Header="连接">
                     <StackPanel Margin="0,12,0,0">
                         <TextBlock Text="Gateway 地址" FontSize="12" Foreground="#99EEEEEE" Margin="0,0,0,6"/>
-                        <TextBox x:Name="UrlBox" FontFamily="Consolas"/>
-                        <TextBlock Text="ws://ip:port 格式" FontSize="10" Foreground="#66EEEEEE" Margin="0,4,0,14"/>
+                        <!-- 可编辑下拉：直接键入新地址，或从历史连接（地址+凭据）中选择自动填充 -->
+                        <ComboBox x:Name="UrlBox" IsEditable="True" FontFamily="Consolas"
+                                  ItemsSource="{Binding GatewayHistoryItems}"
+                                  SelectionChanged="UrlBox_SelectionChanged"
+                                  ToolTip="输入 ws://ip:port，或点右侧箭头选择历史连接">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Url}" FontFamily="Consolas" FontSize="12"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding AuthLabel}" FontSize="10"
+                                                   Foreground="#88678CB3" VerticalAlignment="Center" Margin="10,0,2,0"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="ws://ip:port 格式；▼ 可选历史连接（自动带出 Token/密码）" FontSize="10" Foreground="#66EEEEEE" Margin="0,4,0,14"/>
 
                         <TextBlock Text="认证方式" FontSize="12" Foreground="#99EEEEEE" Margin="0,0,0,6"/>
                         <ComboBox x:Name="AuthTypeCombo" SelectionChanged="AuthTypeCombo_SelectionChanged">

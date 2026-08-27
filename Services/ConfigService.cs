@@ -65,6 +65,21 @@ public static class ConfigService
     }
     public static void SetGatewayUrl(string url) { var s = Load(); s.GatewayUrl = url; Save(); }
 
+    /// <summary>读取连接历史（下拉展示包装，最新在前）。</summary>
+    public static List<GatewayHistoryItem> GetGatewayHistoryItems()
+    {
+        var s = Load();
+        return (s.GatewayHistory ?? new List<GatewayHistoryEntry>())
+            .Select(h => new GatewayHistoryItem
+            {
+                Url = h.Url,
+                UsePasswordAuth = h.UsePasswordAuth,
+                Token = h.Token,
+                Password = h.Password,
+            })
+            .ToList();
+    }
+
     private static string ToBase64Url(byte[] bytes)
     {
         return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -156,6 +171,31 @@ public static class ConfigService
     public static McpConfig GetMcpConfig() => Load().Mcp ?? new McpConfig();
     public static void SetMcpConfig(McpConfig cfg) { var s = Load(); s.Mcp = cfg; Save(); }
 
+    // ── Gateway 连接历史（地址+认证凭据，供下拉快速切换）──
+
+    private const int MaxGatewayHistory = 10;
+
+    /// <summary>
+    /// 记录一条 Gateway 连接历史：按地址去重（同地址更新认证信息并置顶），最新在前，上限 10 条。
+    /// </summary>
+    public static void AddGatewayHistory(string url, bool usePasswordAuth, string? token, string? password)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        var s = Load();
+        s.GatewayHistory ??= new List<GatewayHistoryEntry>();
+        s.GatewayHistory.RemoveAll(h => h.Url == url);
+        s.GatewayHistory.Insert(0, new GatewayHistoryEntry
+        {
+            Url = url,
+            UsePasswordAuth = usePasswordAuth,
+            Token = token,
+            Password = password,
+        });
+        if (s.GatewayHistory.Count > MaxGatewayHistory)
+            s.GatewayHistory.RemoveRange(MaxGatewayHistory, s.GatewayHistory.Count - MaxGatewayHistory);
+        Save();
+    }
+
     public static SpeechConfig GetSpeechConfig() => Load().Speech ?? new SpeechConfig();
     public static void SetSpeechConfig(SpeechConfig cfg) { var s = Load(); s.Speech = cfg; Save(); }
 
@@ -191,6 +231,31 @@ public class Settings
     public double WindowHeight { get; set; } = 580;
     public McpConfig? Mcp { get; set; }
     public SpeechConfig? Speech { get; set; }
+    public List<GatewayHistoryEntry>? GatewayHistory { get; set; }
+}
+
+/// <summary>Gateway 连接历史条目（地址 + 认证方式 + 凭据，用于设置页下拉快速切换）。</summary>
+public class GatewayHistoryEntry
+{
+    public string Url { get; set; } = "";
+    public bool UsePasswordAuth { get; set; }
+    public string? Token { get; set; }
+    public string? Password { get; set; }
+}
+
+/// <summary>Gateway 连接历史的下拉展示包装。</summary>
+public class GatewayHistoryItem
+{
+    public string Url { get; init; } = "";
+    public bool UsePasswordAuth { get; init; }
+    public string? Token { get; init; }
+    public string? Password { get; init; }
+
+    /// <summary>认证方式摘要（下拉行右侧小字，不回显密码明文）。</summary>
+    public string AuthLabel => UsePasswordAuth ? "密码" : "Token";
+
+    /// <summary>可编辑 ComboBox 选中后回填到地址框的是纯地址。</summary>
+    public override string ToString() => Url;
 }
 
 public class McpConfig

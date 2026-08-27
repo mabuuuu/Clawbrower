@@ -20,18 +20,37 @@
             <TextBlock x:Name="TitleText" Text="连接设置" FontSize="14" FontWeight="SemiBold"
                        Foreground="#EEEEEE" Margin="0,0,0,12"/>
 
-            <!-- Gateway URL -->
+            <!-- Gateway URL：可编辑下拉，支持从历史连接中选择并自动带出凭据 -->
             <TextBlock Text="Gateway 地址" FontSize="12" Foreground="#99EEEEEE" Margin="0,0,0,6"/>
-            <TextBox x:Name="UrlBox" FontSize="13" Padding="10,8"
-                     Background="#33222233" Foreground="#EEEEEE" CaretBrush="#FFFFFF"
-                     BorderThickness="0" VerticalContentAlignment="Center"
-                     FontFamily="Consolas">
-                <TextBox.Resources>
-                    <Style TargetType="Border">
-                        <Setter Property="CornerRadius" Value="8"/>
+            <ComboBox x:Name="UrlBox" IsEditable="True" FontSize="13"
+                      Background="#33222233" Foreground="#EEEEEE"
+                      SelectionChanged="UrlBox_SelectionChanged"
+                      ToolTip="输入 ws://ip:port，或点右侧箭头选择历史连接">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Url}" FontFamily="Consolas" FontSize="12"/>
+                            <TextBlock Grid.Column="1" Text="{Binding AuthLabel}" FontSize="10"
+                                       Foreground="#88678CB3" VerticalAlignment="Center" Margin="10,0,2,0"/>
+                        </Grid>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+                <ComboBox.Resources>
+                    <Style TargetType="TextBox">
+                        <Setter Property="Background" Value="#33222233"/>
+                        <Setter Property="Foreground" Value="#EEEEEE"/>
+                        <Setter Property="CaretBrush" Value="#FFFFFF"/>
+                        <Setter Property="Padding" Value="10,8"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="VerticalContentAlignment" Value="Center"/>
+                        <Setter Property="FontFamily" Value="Consolas"/>
                     </Style>
-                </TextBox.Resources>
-            </TextBox>
+                </ComboBox.Resources>
+            </ComboBox>
 
             <!-- Auth type -->
             <TextBlock Text="认证方式" FontSize="12" Foreground="#99EEEEEE" Margin="0,10,0,6"/>
