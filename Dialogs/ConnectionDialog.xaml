@@ -39,17 +39,6 @@
                         </Grid>
                     </DataTemplate>
                 </ComboBox.ItemTemplate>
-                <ComboBox.Resources>
-                    <Style TargetType="TextBox">
-                        <Setter Property="Background" Value="#33222233"/>
-                        <Setter Property="Foreground" Value="#EEEEEE"/>
-                        <Setter Property="CaretBrush" Value="#FFFFFF"/>
-                        <Setter Property="Padding" Value="10,8"/>
-                        <Setter Property="BorderThickness" Value="0"/>
-                        <Setter Property="VerticalContentAlignment" Value="Center"/>
-                        <Setter Property="FontFamily" Value="Consolas"/>
-                    </Style>
-                </ComboBox.Resources>
             </ComboBox>
 
             <!-- Auth type -->

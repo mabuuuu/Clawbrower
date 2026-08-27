@@ -43,6 +43,18 @@
                     <ControlTemplate TargetType="ComboBox">
                         <Grid>
                             <Border Background="{TemplateBinding Background}" CornerRadius="8"/>
+                            <!-- 可编辑模式的文本输入区（IsEditable=True 时由下方 Trigger 显示；
+                                 名称必须是 PART_EditableTextBox，ComboBox 自动绑定 Text） -->
+                            <TextBox x:Name="PART_EditableTextBox"
+                                     Visibility="Collapsed"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     CaretBrush="#FFFFFF"
+                                     Foreground="{TemplateBinding Foreground}"
+                                     FontSize="{TemplateBinding FontSize}"
+                                     FontFamily="{TemplateBinding FontFamily}"
+                                     Padding="{TemplateBinding Padding}"
+                                     VerticalContentAlignment="Center"/>
                             <!-- 点击区域 -->
                             <ToggleButton x:Name="ToggleButton"
                                           Focusable="false"
@@ -64,14 +76,15 @@
                                               VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                               HorizontalAlignment="Left"
                                               TextBlock.Foreground="{TemplateBinding Foreground}"/>
-                            <!-- 下拉箭头 -->
+                            <!-- 下拉箭头（不参与命中测试，避免挡住 ToggleButton 点击） -->
                             <Path x:Name="Arrow"
                                   Data="M0,0 L4,4 8,0"
                                   Stroke="#99EEEEEE"
                                   StrokeThickness="1.5"
                                   HorizontalAlignment="Right"
                                   VerticalAlignment="Center"
-                                  Margin="0,0,10,0"/>
+                                  Margin="0,0,10,0"
+                                  IsHitTestVisible="False"/>
                             <!-- 下拉弹出框 -->
                             <Popup x:Name="Popup"
                                    Placement="Bottom"
@@ -94,6 +107,15 @@
                                 </Border>
                             </Popup>
                         </Grid>
+                        <ControlTemplate.Triggers>
+                            <!-- 可编辑模式：隐藏只读展示层，输入区接管，下拉点击区缩到右侧箭头 -->
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="ContentSite" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="ToggleButton" Property="HorizontalAlignment" Value="Right"/>
+                                <Setter TargetName="ToggleButton" Property="Width" Value="28"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
