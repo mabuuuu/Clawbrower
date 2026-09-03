@@ -29,8 +29,11 @@ public class AudioCaptureService : IDisposable
     public event Action<bool>? OnVoiceActivityChanged;
 
     // ── 声音检测参数 ──
-    /// <summary>归一化 RMS 阈值（0~1）。环境噪声约 0.005-0.01，正常说话约 0.03-0.1。</summary>
-    private const double VoiceRmsThreshold = 0.015;
+    /// <summary>
+    /// 归一化 RMS 阈值（0~1）。环境噪声约 0.005-0.01，正常说话约 0.03-0.1。
+    /// SpeechService 在播放 TTS/应答音期间会临时调高（扬声器回声屏蔽），播放结束恢复。
+    /// </summary>
+    public double VoiceRmsThreshold { get; set; } = 0.015;
     /// <summary>连续静默帧数达到此值才判定停止说话（每帧≈200ms，3帧≈600ms 防闪烁）</summary>
     private const int SilenceFramesToStop = 3;
 
@@ -39,6 +42,9 @@ public class AudioCaptureService : IDisposable
 
     /// <summary>当前是否正在采集</summary>
     public bool IsCapturing => _capturing;
+
+    /// <summary>当前 VAD 是否判定为说话中（供打断/连续对话判断用户是否正在开口）</summary>
+    public bool VoiceActive => _voiceActive;
 
     /// <summary>开始采集</summary>
     public void Start()

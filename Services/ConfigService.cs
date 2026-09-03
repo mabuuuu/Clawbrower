@@ -207,6 +207,19 @@ public static class ConfigService
         var cfg = GetSpeechConfig();
         return string.IsNullOrWhiteSpace(cfg.ServerUrl) ? null : cfg.ServerUrl.Trim();
     }
+
+    /// <summary>
+    /// 返回唤醒应答音（"我在"）音频文件路径；未配置时使用默认路径。
+    /// 文件不存在/为空时调用方直接跳过应答音。
+    /// </summary>
+    public static string? GetWakeResponseAudioPath()
+    {
+        var cfg = GetSpeechConfig();
+        var path = string.IsNullOrWhiteSpace(cfg.WakeResponseAudioPath)
+            ? SpeechConfig.DefaultWakeResponseAudioPath
+            : cfg.WakeResponseAudioPath;
+        return string.IsNullOrWhiteSpace(path) ? null : path.Trim();
+    }
 }
 
 public class Settings
@@ -277,6 +290,10 @@ public enum SpeechMode
 
 public class SpeechConfig
 {
+    /// <summary>唤醒应答音默认路径（"我在"提示音）</summary>
+    public const string DefaultWakeResponseAudioPath =
+        @"C:\Users\61783\Desktop\cb语音交互\我在-当前TTS-Kokoro男声.mp3";
+
     /// <summary>语音功能是否启用</summary>
     public bool IsEnabled { get; set; } = false;
 
@@ -288,6 +305,9 @@ public class SpeechConfig
 
     /// <summary>语音服务器 WebSocket 地址（如 ws://host:9529/speech）。默认为空，首次连接时弹窗填写。</summary>
     public string? ServerUrl { get; set; }
+
+    /// <summary>唤醒应答音（"我在"）mp3 文件路径；为空使用 DefaultWakeResponseAudioPath</summary>
+    public string? WakeResponseAudioPath { get; set; }
 
     /// <summary>唤醒词触发阈值（0~1，默认 0.5，可调 0.1~0.9）</summary>
     public double WakeWordThreshold { get; set; } = 0.5;

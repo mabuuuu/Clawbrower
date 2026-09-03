@@ -44,6 +44,10 @@ public partial class RecordingOverlay : Window
                 StateText.Text = "说话中...";
                 PulseBrush.Color = SpeakingColor;
                 break;
+            case SpeechService.SpeechState.Conversing:
+                StateText.Text = "聆听中...";
+                PulseBrush.Color = ThinkingColor; // 蓝（待命聆听，VAD 说话后由 SetSpeaking 变绿）
+                break;
             default:
                 StateText.Text = "说话中...";
                 PulseBrush.Color = SilentColor;
