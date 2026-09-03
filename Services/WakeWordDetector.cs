@@ -39,6 +39,13 @@ public class WakeWordDetector : IDisposable
     private int _accumulatedSamples;
     private int _predictionCount;
 
+    // —— VAD 语音闸门（2026-09-04 老大指令）：唤醒触发需最近窗口内有真实语音能量，防静音/低噪误触发 ——
+    private const double VoiceGateRms = 0.015;      // 归一化 RMS 阈值（int16≈490）；环境噪声/静音低于此
+    private const int VoiceGateKeepFrames = 128;    // 保留最近 ~10s 语音帧标记
+    private const int VoiceGateWindowFrames = 27;   // 统计窗口 = 唤醒窗口（2.16s）
+    private const int VoiceGateMinVoiceFrames = 3;  // 窗口内至少 3 帧（≥240ms）有语音才允许触发
+    private readonly List<bool> _voiceFrames = new();
+
     // ── 检测状态 ──
     private DateTime _lastTrigger = DateTime.MinValue;
     private DateTime _startTime = DateTime.UtcNow;
@@ -96,6 +103,7 @@ public class WakeWordDetector : IDisposable
     public void Reset()
     {
         _rawSamples.Clear();
+        _voiceFrames.Clear();
         _melBuffer = new float[MelBufferMax * MelBins];
         for (var i = 0; i < EmbeddingWindow * MelBins; i++) _melBuffer[i] = 1.0f; // 全 1（对齐 np.ones((76,32))）
         _melBufferFrames = EmbeddingWindow; // 初始 76 帧已计入（对齐 Python vstack 保留初始帧）
@@ -126,16 +134,21 @@ public class WakeWordDetector : IDisposable
             _rawSamples.RemoveRange(0, _rawSamples.Count - RawBufferMaxSamples);
 
         _accumulatedSamples += sampleCount;
-        if (_accumulatedSamples < FrameSamples || _accumulatedSamples % FrameSamples != 0)
-            return;
-
-        ProcessFrame();
-        _accumulatedSamples = 0;
+        // 2026-09-04 修复：原逻辑要求累积样本数恰好为 1280 的倍数才处理一帧，
+        // 采集回调（200ms=3200 样本）会导致丢帧（每 400ms 只处理 1 帧、mel 序列断裂、唤醒分数被拉低）。
+        // 改为：每满 1280 样本处理一帧，余数保留到下次，保证 mel 流连续。
+        while (_accumulatedSamples >= FrameSamples)
+        {
+            ProcessFrame();
+            _accumulatedSamples -= FrameSamples;
+        }
     }
 
     /// <summary>处理一帧（1280 样本）：mel → embedding → 打分（对齐 _streaming_features + predict）</summary>
     private void ProcessFrame()
     {
+        // 0) VAD 语音闸门：记录本帧（最近 1280 样本）是否有语音能量
+        RecordVoiceFrame();
         // 1) melspectrogram：最近 1280+480 样本 → [8, 32]，spec/10+2
         var ctxLen = Math.Min(_rawSamples.Count, FrameSamples + MelLookbackSamples);
         var ctx = new float[ctxLen];
@@ -162,7 +175,7 @@ public class WakeWordDetector : IDisposable
                 ScoreUpdated?.Invoke(score);
                 var now = DateTime.UtcNow;
                 var cooldownPassed = (now - _startTime).TotalSeconds >= CooldownSeconds;
-                if (score >= Threshold && cooldownPassed && (now - _lastTrigger).TotalSeconds >= DebounceSeconds)
+                if (score >= Threshold && VoiceGatePassed() && cooldownPassed && (now - _lastTrigger).TotalSeconds >= DebounceSeconds)
                 {
                     _lastTrigger = now;
                     Logger.Info($"WakeWordDetector triggered, score={score:F3}");
@@ -170,6 +183,44 @@ public class WakeWordDetector : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>记录当前帧（本帧新增的最近 1280 样本）是否为语音帧：归一化 RMS ≥ VoiceGateRms</summary>
+    private void RecordVoiceFrame()
+    {
+        var n = Math.Min(FrameSamples, _rawSamples.Count);
+        if (n == 0)
+        {
+            _voiceFrames.Add(false);
+            TrimVoiceFrames();
+            return;
+        }
+        double sum = 0;
+        for (var i = _rawSamples.Count - n; i < _rawSamples.Count; i++)
+        {
+            var v = _rawSamples[i] / 32768.0;
+            sum += v * v;
+        }
+        _voiceFrames.Add(Math.Sqrt(sum / n) >= VoiceGateRms);
+        TrimVoiceFrames();
+    }
+
+    private void TrimVoiceFrames()
+    {
+        while (_voiceFrames.Count > VoiceGateKeepFrames)
+            _voiceFrames.RemoveAt(0);
+    }
+
+    /// <summary>VAD 闸门：最近 VoiceGateWindowFrames 帧内语音帧数 ≥ VoiceGateMinVoiceFrames 才放行触发。
+    /// 静音/低噪环境模型分数可能偶然抬高，但无真实语音能量时一律拦截。</summary>
+    private bool VoiceGatePassed()
+    {
+        var take = Math.Min(VoiceGateWindowFrames, _voiceFrames.Count);
+        if (take == 0) return false;
+        var cnt = 0;
+        for (var i = _voiceFrames.Count - take; i < _voiceFrames.Count; i++)
+            if (_voiceFrames[i]) cnt++;
+        return cnt >= VoiceGateMinVoiceFrames;
     }
 
     /// <summary>melspectrogram.onnx：输入 [1, samples] float32，输出 [1, 1, time, 32]（对齐 Python np.squeeze）</summary>
