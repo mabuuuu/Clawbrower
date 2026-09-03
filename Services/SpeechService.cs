@@ -532,10 +532,13 @@ public class SpeechService : IDisposable
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
-                OnTranscript?.Invoke(text);
-                // 连续对话退出词：ASR 定稿文本命中 → 停止回复并退出对话回待唤醒态
+                // 退出词：不显示/不上屏（不 Invoke OnTranscript，避免污染会话上下文），直接终止本轮回待唤醒态
                 if (_mode == SpeechMode.WakeWord && IsExitKeyword(text))
+                {
                     ExitConversationByKeyword(text);
+                    return;
+                }
+                OnTranscript?.Invoke(text);
             });
         };
 
