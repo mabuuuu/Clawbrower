@@ -106,7 +106,7 @@ public class SpeechService : IDisposable
     /// <summary>
     /// 声音活动变化（NAudio 工作线程触发，切到 UI 线程处理）：
     /// - 唤醒应答音播放中用户开口 → 掐断应答音直接开始录音
-    /// - Playing 中用户开口（仅唤醒词模式）→ 打断 TTS，进 Conversing / 继续录音
+    /// - Waiting/Playing（思考中/播放中）用户开口 → 打断回复，进 Conversing / 继续录音
     /// - Recording：切换浮层红/绿点 + 唤醒词模式静默结束计时
     /// - Conversing：检测到用户开口 → 自动开始新一轮录音
     /// </summary>
@@ -125,10 +125,11 @@ public class SpeechService : IDisposable
                 return;
             }
 
-            // 2) TTS 回复播放中用户开口 → 打断（仅唤醒词模式；PTT 模式用按键打断）
-            if (speaking && _state == SpeechState.Playing && _mode == SpeechMode.WakeWord)
+            // 2) 思考中（Waiting）或回复播放中（Playing）用户开口 → 打断（仅唤醒词模式；PTT 模式用按键打断）
+            if (speaking && _mode == SpeechMode.WakeWord &&
+                (_state == SpeechState.Waiting || _state == SpeechState.Playing))
             {
-                Logger.Info("Barge-in: voice detected while playing reply");
+                Logger.Info($"Barge-in: voice detected while {_state}, cancelling reply");
                 _player.Stop();
                 DisconnectClient();
                 ClearPlayQueue();
