@@ -23,7 +23,7 @@ public class SpeechService : IDisposable
     private readonly KeyboardHookService _keyboard = new();
     private readonly AudioCaptureService _capture = new();
     private readonly AudioPlayer _player = new();
-    private readonly WakeWordDetector _wakeWord = new();
+    private readonly SherpaKwsDetector _wakeWord = new();
     private SpeechClient? _client;
     private readonly Queue<byte[]> _playQueue = new();
     private bool _audioEnded;

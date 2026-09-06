@@ -21,6 +21,7 @@
   <ItemGroup>
     <None Include="mcp\**" CopyToOutputDirectory="PreserveNewest" Link="mcp\%(RecursiveDir)%(Filename)%(Extension)" />
     <None Include="wakeword\**" CopyToOutputDirectory="PreserveNewest" Link="wakeword\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="kws\**" CopyToOutputDirectory="PreserveNewest" Link="kws\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
