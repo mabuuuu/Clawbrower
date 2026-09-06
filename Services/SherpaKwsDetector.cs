@@ -112,7 +112,7 @@ namespace Clawbrower.Services
                 feat_config = new SherpaOnnxNative.SherpaOnnxFeatureConfig { sample_rate = 16000, feature_dim = 80 },
                 model_config = m,
                 max_active_paths = 4,
-                num_trailing_blanks = 1,
+                num_trailing_blanks = 0,
                 keywords_score = 1.0f,
                 keywords_threshold = 0.15f,
             };
@@ -169,7 +169,7 @@ namespace Clawbrower.Services
                 if (samples.Length == 0) return;
 
                 SherpaOnnxNative.SherpaOnnxOnlineStreamAcceptWaveform(_stream, SampleRate, samples, samples.Length);
-                if (SherpaOnnxNative.SherpaOnnxIsKeywordStreamReady(_spotter, _stream) == 1)
+                while (SherpaOnnxNative.SherpaOnnxIsKeywordStreamReady(_spotter, _stream) == 1)
                 {
                     SherpaOnnxNative.SherpaOnnxDecodeKeywordStream(_spotter, _stream);
                     CheckResult();
